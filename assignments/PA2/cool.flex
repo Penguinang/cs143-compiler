@@ -13,8 +13,11 @@
 #include <utilities.h>
 
 /* The compiler assumes these identifiers. */
-#define yylval cool_yylval
-#define yylex  cool_yylex
+// #define yylval cool_yylval
+// #define yylex  cool_yylex
+
+#define cool_yylex  yylex
+extern "C" int yylex (void);
 
 /* Max size of string constants */
 #define MAX_STR_CONST 1025

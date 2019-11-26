@@ -1,0 +1,4 @@
+*.o
+*.d
+*-lex.cc
+assignments/PA2/lexer
