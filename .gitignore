@@ -2,3 +2,9 @@
 *.d
 *-lex.cc
 assignments/PA2/lexer
+assignments/PA2/cgen
+assignments/PA2/hello_world.cl
+assignments/PA2/hello_world.s
+assignments/PA2/lexer_comp
+assignments/PA2/parser
+assignments/PA2/semant
