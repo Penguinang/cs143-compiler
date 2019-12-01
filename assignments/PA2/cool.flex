@@ -69,7 +69,7 @@ IDBODY          ({CHARACTER}|_|{DIGIT})*
 PCLASSID        {UCHARACTER}{IDBODY}
 POBJECTID       {LCHARACTER}{IDBODY}
 
-%x comment string
+%x comment comment_dash string
 %%
 
  /*
@@ -85,14 +85,44 @@ POBJECTID       {LCHARACTER}{IDBODY}
 <comment>{
 "*)"            { BEGIN(INITIAL); }
 {NEWLINE}       { ++curr_lineno; }
+<<EOF>>         {
+    cool_yylval.error_msg = "Unterminated comment block"; 
+    yyterminate();
+    return (ERROR); 
+}
 .               { }
 }
+
+--              { BEGIN(comment_dash); }
+<comment_dash>{
+.               { }
+{NEWLINE}              { ++curr_lineno; BEGIN(INITIAL); }
+}
+
 "*)"            { printf("error: unmatched right comment"); }
 
 "\""            { BEGIN(string); }
 <string>{
 \\\"            { strcat(string_buf, yytext); }
-\\n            { strcat(string_buf, "\n"); }
+\\b             { strcat(string_buf, "\b"); }
+\\t             { strcat(string_buf, "\t"); }
+\\n             { strcat(string_buf, "\n"); }
+\\\n            { 
+    strcat(string_buf, "\n");
+    ++curr_lineno;
+    }
+\n              { 
+    cool_yylval.error_msg = "A non-escaped newline character may not appear in a string, use \n or \\ instead"; 
+    ++curr_lineno;
+    return (ERROR); 
+    }
+<<EOF>>         {
+    cool_yylval.error_msg = "Unterminated string literal"; 
+    yyterminate();
+    return (ERROR);
+}
+\\f             { strcat(string_buf, "\f"); }
+
 \"         { 
     BEGIN(INITIAL); 
     cool_yylval.symbol = stringtable.add_string(string_buf);
@@ -103,31 +133,37 @@ POBJECTID       {LCHARACTER}{IDBODY}
 
 }
 
-"class"         { return (CLASS); }
-"inherits"      { return (INHERITS); }
-
-"if"            { return (IF); }
-"then"          { return (THEN); }
-"else"          { return (ELSE); }
-"fi"            { return (FI); }
-"loop"          { return (LOOP); }
-"pool"          { return (POOL); }
-"while"         { return (WHILE); }
-"of"            { return (OF); }
-"case"          { return (CASE); }
-"esac"          { return (ESAC); }
-"let"           { return (LET); }
-"new"           { return (NEW); }
+(?i:class)         { return (CLASS); }
+(?i:inherits)      { return (INHERITS); }
+(?i:if)            { return (IF); }
+(?i:then)          { return (THEN); }
+(?i:else)          { return (ELSE); }
+(?i:fi)            { return (FI); }
+(?i:loop)          { return (LOOP); }
+(?i:pool)          { return (POOL); }
+(?i:while)         { return (WHILE); }
+(?i:of)            { return (OF); }
+(?i:case)          { return (CASE); }
+(?i:esac)          { return (ESAC); }
+(?i:let)           { return (LET); }
+(?i:new)           { return (NEW); }
+(?i:isvoid)        { return (ISVOID); }
+(?i:not)           { return (NOT); }
+(?i:in)            { return (IN); }
+t(?i:rue)           { 
+    cool_yylval.boolean = true;
+    return (BOOL_CONST); }
+f(?i:alse)           { 
+    cool_yylval.boolean = false;
+    return (BOOL_CONST); }
 "<-"            { return (ASSIGN); }
-"isvoid"        { return (ISVOID); }
-"not"           { return (NOT); }
-"in"            { return (IN); }
 "+"             { return ('+'); }
 "/"             { return ('/'); }
 "-"             { return ('-'); }
 "*"             { return ('*'); }
 "="             { return ('='); }
 "<"             { return ('<'); }
+"<="             { return (LE); }
 "."             { return ('.'); }
 "~"             { return ('~'); }
 ","             { return (','); }
@@ -153,9 +189,13 @@ POBJECTID       {LCHARACTER}{IDBODY}
   */
 {DARROW}		{ return (DARROW); }
 
-    /*
-.               { printf("\nerror: unmatched %s\n", yytext); exit(-1); }
-    */
+
+.               { 
+    cool_yylval.error_msg = "unrecognized token:";
+    printf("\nerror: unmatched %s\n", yytext); 
+    return (ERROR);
+}
+
 
  /*
   * Keywords are case-insensitive except for the values true and false,
