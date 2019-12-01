@@ -699,7 +699,7 @@ char *yytext;
 
 /* The compiler assumes these identifiers. */
 #define yylval cool_yylval
-#define yylex  cool_yylex
+// #define yylex  cool_yylex
 
 /* Max size of string constants */
 #define MAX_STR_CONST 1025
@@ -913,7 +913,7 @@ static int input (void );
 #define YY_DECL_IS_OURS 1
 /* %if-c-only Standard (non-C++) definition */
 
-extern int yylex (void);
+extern "C" int yylex (void);
 
 #define YY_DECL int yylex (void)
 /* %endif */

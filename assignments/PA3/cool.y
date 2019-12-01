@@ -4,6 +4,7 @@
 *
 */
 %{
+  #define cool_yylex           yylex
   #include <iostream>
   #include "cool-tree.h"
   #include "stringtab.h"
@@ -75,7 +76,7 @@
     
     
     void yyerror(char *s);        /*  defined below; called for each parse error */
-    extern int yylex();           /*  the entry point to the lexer  */
+    extern "C" int yylex();           /*  the entry point to the lexer  */
     
     /************************************************************************/
     /*                DONT CHANGE ANYTHING IN THIS SECTION                  */

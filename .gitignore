@@ -11,3 +11,5 @@ assignments/PA*/semant
 assignments/PA*/grading
 assignments/PA*/*-grading.pl
 assignments/PA*/custom_test
+assignments/PA*/*.d
+assignments/PA3/cool-parse.cc
