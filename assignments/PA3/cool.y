@@ -137,8 +137,31 @@
     
     /* You will want to change the following line. */
     %type <features> dummy_feature_list
+    %type <feature> feature
+    %type <feature> method
+    %type <feature> attribute
+    %type <expression> expr
+    %type <formal> formal
+    %type <formals> formal_list
+    %type <expressions> actual_list
+    %type <expressions> comma_exprs
+    %type <expressions> expr_list
+    %type <case_> case_item
+    %type <cases> case_items
+    %type <expression> let_expression 
+    %type <expression> let_rest 
+
     
     /* Precedence declarations go here. */
+    %right NOT
+    %right ASSIGN
+    %nonassoc LE '<' '='
+    %left '+' '-'
+    %left '*' '/'
+    %right ISVOID
+    %right '~'
+    %left '@'
+    %left '.'
     
     
     %%
@@ -168,6 +191,127 @@
     /* Feature list may be empty, but no empty features in list. */
     dummy_feature_list:		/* empty */
     {  $$ = nil_Features(); }
+    | dummy_feature_list feature
+    { $$ = append_Features($1, single_Features($2)); }
+    ;
+
+    feature: method
+    | attribute
+    ;
+
+    attribute: OBJECTID ':' TYPEID ASSIGN expr ';'
+    { $$ = attr($1, $3, $5);}
+    | OBJECTID ':' TYPEID ';'
+    { $$ = attr($1, $3, no_expr());}
+    ;
+
+    method: OBJECTID '(' formal_list ')' ':' TYPEID '{' expr '}' ';'
+    { $$ = method($1, $3, $6, $8); }
+    ;
+
+    formal: OBJECTID ':' TYPEID
+    { $$ = formal($1, $3); }
+    ;
+
+    formal_list: /* empty */
+    { $$ = nil_Formals(); }
+    | formal
+    { $$ = single_Formals($1); }
+    | formal_list ',' formal 
+    { $$ = append_Formals($1, single_Formals($3)); }
+    ;
+
+    actual_list: /* empty */
+    { $$ = nil_Expressions(); }
+    | comma_exprs
+    ;
+
+    comma_exprs: expr
+    { $$ = single_Expressions($1); }
+    | comma_exprs ',' expr
+    { $$ = append_Expressions($1, single_Expressions($3)); }
+    ;
+
+    expr_list: expr ';'
+    { $$ = single_Expressions($1); }
+    | expr_list expr ';'
+    { $$ = append_Expressions($1, single_Expressions($2)); }
+    ;
+
+    case_item: OBJECTID ':' TYPEID DARROW expr ';'
+    { $$ = branch($1, $3, $5); }
+    ;
+
+    case_items: case_item
+    { $$ = single_Cases($1); }
+    | case_items case_item
+    { $$ = append_Cases($1, single_Cases($2)); }
+    ;
+
+    expr: OBJECTID ASSIGN expr
+    { $$ = assign($1, $3); }
+    | expr '.' OBJECTID '(' actual_list ')'
+    { $$ = dispatch($1, $3, $5); }
+    | expr '@' TYPEID '.' OBJECTID '(' actual_list ')'
+    { $$ = static_dispatch($1, $3, $5, $7); }
+    | OBJECTID '(' actual_list ')'
+    { $$ = dispatch(object(idtable.add_string("self")), $1, $3); }
+    | IF expr THEN expr ELSE expr FI
+    { $$ = cond($2, $4, $6); }
+    | WHILE expr LOOP expr POOL
+    { $$ = loop($2, $4); }
+    | '{' expr_list '}'
+    { $$ = block($2); }
+    | let_expression 
+    | CASE expr OF case_items ESAC
+    { $$ = typcase($2, $4); }
+    | NEW TYPEID
+    { $$ = new_($2); }
+    | ISVOID expr
+    { $$ = isvoid($2); }
+    | expr '+' expr
+    { $$ = plus($1, $3); }
+    | expr '-' expr
+    { $$ = sub($1, $3); }
+    | expr '*' expr
+    { $$ = mul($1, $3); }
+    | expr '/' expr
+    { $$ = divide($1, $3); }
+    | '~' expr
+    { $$ = comp($2); }
+    | expr '<' expr
+    { $$ = lt($1, $3); }
+    | expr LE expr
+    { $$ = leq($1, $3); }
+    | expr '=' expr
+    { $$ = eq($1, $3); }
+    | NOT expr
+    { $$ = neg($2); }
+    | '(' expr ')'
+    { $$ = $2; }
+    | OBJECTID
+    { $$ = object($1); }
+    | INT_CONST
+    { $$ = int_const($1); }
+    | STR_CONST
+    { $$ = string_const($1); }
+    | BOOL_CONST
+    { $$ = bool_const($1); }
+    ;
+    
+    let_expression: LET OBJECTID ':' TYPEID ASSIGN expr let_rest
+    { $$ = let($2, $4, $6, $7); }
+    | LET OBJECTID ':' TYPEID  let_rest
+    { $$ = let($2, $4, no_expr(), $5); }
+    ;
+
+    let_rest: IN expr
+    { $$ = $2; }
+    | ',' OBJECTID ':' TYPEID ASSIGN expr let_rest
+    { $$ = let($2, $4, $6, $7); }
+    | ',' OBJECTID ':' TYPEID let_rest
+    { $$ = let($2, $4, no_expr(), $5); }
+    ;
     
     
     /* end of grammar */
