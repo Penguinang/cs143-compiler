@@ -56,7 +56,7 @@ DARROW          =>
 DIGIT           [0-9]
 ZERO            0
 UNUMBER         [1-9]{DIGIT}*|{ZERO}
-SNUMBER         (\+|-){UNUMBER}
+SNUMBER         -{UNUMBER}
 INTNUM          {UNUMBER}|{SNUMBER}
 NEWLINE         \n
 TAB             \t
