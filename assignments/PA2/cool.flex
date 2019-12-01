@@ -36,6 +36,17 @@ extern FILE *fin; /* we read from this file */
 
 char string_buf[MAX_STR_CONST]; /* to assemble string constants */
 char *string_buf_ptr;
+int comment_layer = 0;
+
+#define CHECK_BUF_LEN \
+{ \
+    if(strlen(string_buf) + 2 > MAX_STR_CONST) { \
+            cool_yylval.error_msg = "String constant too long";  \
+            memset(string_buf, 0, MAX_STR_CONST); \
+            BEGIN(string_error); \
+            return (ERROR); \
+        } \
+}
 
 extern int curr_lineno;
 extern int verbose_flag;
@@ -55,9 +66,7 @@ extern YYSTYPE cool_yylval;
 DARROW          =>
 DIGIT           [0-9]
 ZERO            0
-UNUMBER         [1-9]{DIGIT}*|{ZERO}
-SNUMBER         -{UNUMBER}
-INTNUM          {UNUMBER}|{SNUMBER}
+INTNUM         {DIGIT}+
 NEWLINE         \n
 TAB             \t
 WHITESPACE      [\r\t\v\f ]
@@ -69,7 +78,7 @@ IDBODY          ({CHARACTER}|_|{DIGIT})*
 PCLASSID        {UCHARACTER}{IDBODY}
 POBJECTID       {LCHARACTER}{IDBODY}
 
-%x comment comment_dash string
+%x comment comment_dash string string_error
 %%
 
  /*
@@ -81,13 +90,25 @@ POBJECTID       {LCHARACTER}{IDBODY}
     cool_yylval.symbol = inttable.add_string(yytext);
     return (INT_CONST); }
 
-"(*"            { BEGIN(comment); }
+"(*"            { 
+    BEGIN(comment); 
+    ++ comment_layer;
+}
 <comment>{
-"*)"            { BEGIN(INITIAL); }
+"\\(*"          { }
+"\\*)"          { }
+
+"(*"            { 
+    ++ comment_layer;
+}
+"*)"            { 
+    if(--comment_layer == 0)
+        BEGIN(INITIAL); 
+}
 {NEWLINE}       { ++curr_lineno; }
 <<EOF>>         {
-    cool_yylval.error_msg = "Unterminated comment block"; 
-    yyterminate();
+    BEGIN(INITIAL);
+    cool_yylval.error_msg = "EOF in comment"; 
     return (ERROR); 
 }
 .               { }
@@ -99,39 +120,91 @@ POBJECTID       {LCHARACTER}{IDBODY}
 {NEWLINE}              { ++curr_lineno; BEGIN(INITIAL); }
 }
 
-"*)"            { printf("error: unmatched right comment"); }
+"*)"            { 
+    cool_yylval.error_msg = "Unmatched *)"; 
+    return (ERROR);
+}
 
 "\""            { BEGIN(string); }
 <string>{
-\\\"            { strcat(string_buf, yytext); }
-\\b             { strcat(string_buf, "\b"); }
-\\t             { strcat(string_buf, "\t"); }
-\\n             { strcat(string_buf, "\n"); }
+\\\"            { 
+    CHECK_BUF_LEN;
+    strcat(string_buf, yytext+1); }
+\\b             { 
+    CHECK_BUF_LEN;
+    strcat(string_buf, "\b"); }
+\\t             { 
+    CHECK_BUF_LEN;
+    strcat(string_buf, "\t"); }
+\\n             { 
+    CHECK_BUF_LEN;
+    strcat(string_buf, "\n"); }
+\\f             { 
+    CHECK_BUF_LEN;
+    strcat(string_buf, "\f"); }
+\\\0              { 
+    cool_yylval.error_msg = "String contains escaped null character."; 
+    memset(string_buf, 0, MAX_STR_CONST);
+    BEGIN(string_error);
+    return (ERROR);
+}
+\0 {
+    cool_yylval.error_msg = "String contains null character."; 
+    memset(string_buf, 0, MAX_STR_CONST);
+    BEGIN(string_error);
+    return (ERROR);
+}
+\\\\            { 
+    CHECK_BUF_LEN;
+    strcat(string_buf, "\\"); }
+\\.             { 
+    CHECK_BUF_LEN;
+    strcat(string_buf, yytext+1); }
+
 \\\n            { 
+    
+    CHECK_BUF_LEN;
     strcat(string_buf, "\n");
     ++curr_lineno;
     }
 \n              { 
-    cool_yylval.error_msg = "A non-escaped newline character may not appear in a string, use \n or \\ instead"; 
+    cool_yylval.error_msg = "Unterminated string constant"; 
+    BEGIN(INITIAL); 
+    memset(string_buf, 0, MAX_STR_CONST);
     ++curr_lineno;
-    return (ERROR); 
+    return (ERROR);
     }
 <<EOF>>         {
-    cool_yylval.error_msg = "Unterminated string literal"; 
-    yyterminate();
+    BEGIN(INITIAL); 
+    cool_yylval.error_msg = "EOF in string constant"; 
     return (ERROR);
 }
-\\f             { strcat(string_buf, "\f"); }
 
 \"         { 
-    BEGIN(INITIAL); 
     cool_yylval.symbol = stringtable.add_string(string_buf);
+    BEGIN(INITIAL); 
     memset(string_buf, 0, MAX_STR_CONST);
     return (STR_CONST);
      }
-.               { strcat(string_buf, yytext); }
+
+
+.               { 
+    CHECK_BUF_LEN;
+    strcat(string_buf, yytext); }
 
 }
+
+<string_error>{
+\\\"            { }
+\"  {
+    BEGIN(INITIAL);
+}
+\n  {
+    BEGIN(INITIAL);
+}
+.   {}
+}
+
 
 (?i:class)         { return (CLASS); }
 (?i:inherits)      { return (INHERITS); }
@@ -191,8 +264,7 @@ f(?i:alse)           {
 
 
 .               { 
-    cool_yylval.error_msg = "unrecognized token:";
-    printf("\nerror: unmatched %s\n", yytext); 
+    cool_yylval.error_msg = yytext;
     return (ERROR);
 }
 
