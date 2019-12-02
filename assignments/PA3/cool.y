@@ -186,6 +186,7 @@
     stringtable.add_string(curr_filename)); }
     | CLASS TYPEID INHERITS TYPEID '{' dummy_feature_list '}' ';'
     { $$ = class_($2,$4,$6,stringtable.add_string(curr_filename)); }
+    | error ';'
     ;
     
     /* Feature list may be empty, but no empty features in list. */
@@ -197,6 +198,7 @@
 
     feature: method
     | attribute
+    | error ';'
     ;
 
     attribute: OBJECTID ':' TYPEID ASSIGN expr ';'
@@ -207,6 +209,7 @@
 
     method: OBJECTID '(' formal_list ')' ':' TYPEID '{' expr '}' ';'
     { $$ = method($1, $3, $6, $8); }
+    | OBJECTID '(' formal_list ')' ':' TYPEID '{' error '}' ';'
     ;
 
     formal: OBJECTID ':' TYPEID
@@ -236,6 +239,8 @@
     { $$ = single_Expressions($1); }
     | expr_list expr ';'
     { $$ = append_Expressions($1, single_Expressions($2)); }
+    | expr_list error ';'
+    { yyerrok; }
     ;
 
     case_item: OBJECTID ':' TYPEID DARROW expr ';'
@@ -260,8 +265,11 @@
     { $$ = cond($2, $4, $6); }
     | WHILE expr LOOP expr POOL
     { $$ = loop($2, $4); }
+    | WHILE expr LOOP expr error
     | '{' expr_list '}'
     { $$ = block($2); }
+    | '{' error '}'
+    { yyerrok; }
     | let_expression 
     | CASE expr OF case_items ESAC
     { $$ = typcase($2, $4); }
@@ -278,7 +286,7 @@
     | expr '/' expr
     { $$ = divide($1, $3); }
     | '~' expr
-    { $$ = comp($2); }
+    { $$ = neg($2); }
     | expr '<' expr
     { $$ = lt($1, $3); }
     | expr LE expr
@@ -286,7 +294,7 @@
     | expr '=' expr
     { $$ = eq($1, $3); }
     | NOT expr
-    { $$ = neg($2); }
+    { $$ = comp($2); }
     | '(' expr ')'
     { $$ = $2; }
     | OBJECTID
@@ -303,6 +311,7 @@
     { $$ = let($2, $4, $6, $7); }
     | LET OBJECTID ':' TYPEID  let_rest
     { $$ = let($2, $4, no_expr(), $5); }
+    | error let_rest
     ;
 
     let_rest: IN expr
