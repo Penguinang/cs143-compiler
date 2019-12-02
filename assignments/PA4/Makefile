@@ -51,7 +51,7 @@ semant:  ${SEMANT_OBJS} lexer parser cgen
 	${CC} ${CFLAGS} ${SEMANT_OBJS} ${LIB} -o semant
 
 symtab_example: symtab_example.cc 
-	${CC} ${CFLAGS} symtab_example.cc ${LIB} -o symtab_example
+	${CC} ${CFLAGS} symtab_example.cc -o symtab_example
 
 .cc.o:
 	${CC} ${CFLAGS} -c $<

@@ -15,3 +15,4 @@ assignments/PA*/*.d
 assignments/PA3/cool-parse.cc
 assignments/PA3/cool.output
 assignments/PA3/cool.tab.h
+assignments/PA4/symtab_example
