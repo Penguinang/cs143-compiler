@@ -3,6 +3,8 @@
 
 #include <assert.h>
 #include <iostream>  
+#include <map>
+using std::map;
 #include "cool-tree.h"
 #include "stringtab.h"
 #include "symtab.h"
@@ -24,6 +26,25 @@ private:
   int semant_errors;
   void install_basic_classes();
   ostream& error_stream;
+
+  Classes basic_classes;
+  Classes user_classes;
+  map<Symbol, Class_> classMap;
+  
+
+  /**
+   * check inheritance relationship
+   * 1. no cycle
+   * 2. no inheritance from Int, Bool, String
+   * 3. no inheritance from undeclared class
+   */
+  bool checkInheritance();
+
+  void traverseClass(Class_ ClassNode);
+  void traverseFeature(Feature FeatureNode);
+  void traverseAttribute(Feature AttrNode);
+  void traverseMethod(Feature MethodNode);
+  void traverseExpression(Expression ExpressionNode);
 
 public:
   ClassTable(Classes);

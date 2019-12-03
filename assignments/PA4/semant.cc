@@ -86,7 +86,17 @@ static void initialize_constants(void)
 ClassTable::ClassTable(Classes classes) : semant_errors(0) , error_stream(cerr) {
 
     /* Fill this in */
+    user_classes = classes;
+    for(auto i = user_classes->first(); user_classes->more(i); i = user_classes->next(i)) {
+        Class_ ClassNode = user_classes->nth(i);
+        class__class *classNode = dynamic_cast<class__class*>(ClassNode);
+        classMap[classNode->get_name()] = ClassNode;
+    }
 
+    install_basic_classes();
+    if(checkInheritance()) {
+
+    }
 }
 
 void ClassTable::install_basic_classes() {
@@ -188,6 +198,50 @@ void ClassTable::install_basic_classes() {
 						      Str, 
 						      no_expr()))),
 	       filename);
+
+    basic_classes = single_Classes(Object_class);
+    basic_classes = append_Classes(basic_classes, single_Classes(IO_class));
+    basic_classes = append_Classes(basic_classes, single_Classes(Int_class));
+    basic_classes = append_Classes(basic_classes, single_Classes(Bool_class));
+    basic_classes = append_Classes(basic_classes, single_Classes(Str_class));
+
+    classMap[Object] = Object_class;
+    classMap[IO] = IO_class;
+    classMap[Int] = Int_class;
+    classMap[Bool] = Bool_class;
+    classMap[Str] = Str_class;
+}
+
+
+bool ClassTable::checkInheritance() {
+    for(auto class_pair : classMap) {
+        auto classNode = dynamic_cast<class__class*>(class_pair.second);
+        auto childSymbol = classNode->get_name();
+        auto parentSymbol = classNode->get_parent();
+        if(classNode->get_name() != Object && classMap.find(parentSymbol) == classMap.end()) {
+            semant_error(classNode) << classNode->get_name() << ": unknown parent class " << parentSymbol->get_string() << endl;
+            return false;
+        }
+
+        if(parentSymbol == Int || parentSymbol == Bool || parentSymbol == Str) {
+            semant_error(classNode) << classNode->get_name() << ": inheriting from Int, Bool, String is forbidden" << endl;
+            return false;
+        }
+
+        while(parentSymbol != Object && parentSymbol != No_class) {
+            if(parentSymbol == childSymbol) {
+                semant_error(classNode) << classNode->get_name() << ": a inheritance cycle found" << endl;
+                return false;
+            }
+            parentSymbol = dynamic_cast<class__class*>(classMap[parentSymbol])->get_parent();
+        }
+    }
+    return true;    
+}
+
+void ClassTable::traverseClass(Class_ ClassNode) {
+    class__class *classNode = dynamic_cast<class__class*>(ClassNode);
+    classNode->get_features();
 }
 
 ////////////////////////////////////////////////////////////////////

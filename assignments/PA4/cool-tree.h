@@ -12,6 +12,8 @@
 #include "tree.h"
 #include "cool-tree.handcode.h"
 
+#include "class_attr_macro.h"
+
 
 // define the class for phylum
 // define simple phylum - Program
@@ -161,6 +163,10 @@ public:
    }
    Class_ copy_Class_();
    void dump(ostream& stream, int n);
+
+   GETTER(name)
+   GETTER(parent)
+   GETTER(features)
 
 #ifdef Class__SHARED_EXTRAS
    Class__SHARED_EXTRAS
