@@ -194,6 +194,11 @@ public:
    Feature copy_Feature();
    void dump(ostream& stream, int n);
 
+   GETTER(name)
+   GETTER(formals)
+   GETTER(return_type)
+   GETTER(expr)
+
 #ifdef Feature_SHARED_EXTRAS
    Feature_SHARED_EXTRAS
 #endif
@@ -218,6 +223,10 @@ public:
    Feature copy_Feature();
    void dump(ostream& stream, int n);
 
+   GETTER(name)
+   GETTER(type_decl)
+   GETTER(init)
+
 #ifdef Feature_SHARED_EXTRAS
    Feature_SHARED_EXTRAS
 #endif
@@ -239,6 +248,9 @@ public:
    }
    Formal copy_Formal();
    void dump(ostream& stream, int n);
+
+   GETTER(name)
+   GETTER(type_decl)
 
 #ifdef Formal_SHARED_EXTRAS
    Formal_SHARED_EXTRAS
@@ -263,6 +275,10 @@ public:
    }
    Case copy_Case();
    void dump(ostream& stream, int n);
+
+   GETTER(name)
+   GETTER(type_decl)
+   GETTER(expr)
 
 #ifdef Case_SHARED_EXTRAS
    Case_SHARED_EXTRAS
@@ -404,6 +420,9 @@ public:
    Expression copy_Expression();
    void dump(ostream& stream, int n);
 
+   GETTER(expr)
+   GETTER(cases)
+
 #ifdef Expression_SHARED_EXTRAS
    Expression_SHARED_EXTRAS
 #endif
@@ -449,6 +468,11 @@ public:
    }
    Expression copy_Expression();
    void dump(ostream& stream, int n);
+
+   GETTER(identifier)
+   GETTER(type_decl)
+   GETTER(init)
+   GETTER(body)
 
 #ifdef Expression_SHARED_EXTRAS
    Expression_SHARED_EXTRAS
