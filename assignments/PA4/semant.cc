@@ -7,6 +7,8 @@
 using std::string;
 #include <stack>
 using std::stack;
+#include <set>
+using std::set;
 #include "semant.h"
 #include "utilities.h"
 
@@ -91,15 +93,20 @@ ClassTable::ClassTable(Classes classes) : semant_errors(0) , error_stream(cerr),
     symbolTable(), /* enter global scope */ globalScope(symbolTable) {
     /* Fill this in */
 
+    install_basic_classes();
+
     user_classes = classes;
     for(auto i = user_classes->first(); user_classes->more(i); i = user_classes->next(i)) {
         Class_ ClassNode = user_classes->nth(i);
         class__class *classNode = dynamic_cast<class__class*>(ClassNode);
+        if(classMap.find(classNode->get_name()) != classMap.end() || classNode->get_name() == SELF_TYPE) {
+            semant_error(ClassNode) << "redefinition of class " << classNode->get_name() << endl;
+            return;
+        }
         classMap[classNode->get_name()] = ClassNode;
         addid(classNode->get_name(), CLASS_NAME, ClassNode);
     }
 
-    install_basic_classes();
     if(checkInheritance()) {
         for(auto i = basic_classes->first(); basic_classes->more(i); i = basic_classes->next(i)) {
             Class_ ClassNode = basic_classes->nth(i);
@@ -117,6 +124,10 @@ ClassTable::ClassTable(Classes classes) : semant_errors(0) , error_stream(cerr),
             Class_ ClassNode = user_classes->nth(i);
             traverseClass(ClassNode, ClassNode, false);
         }
+    }
+    
+    if(classMap.find(Main) == classMap.end()) {
+        semant_error() << "Class Main is not defined." << endl;
     }
 }
 
@@ -290,6 +301,22 @@ void ClassTable::traverseClass(Class_ ClassNode, Class_, bool basic_class) {
     addid(SELF_TYPE, CLASS_NAME, ClassNode);
     classMap[SELF_TYPE] = ClassNode;
     class__class *classNode = dynamic_cast<class__class*>(ClassNode);
+
+    // inherit attribute from base
+    Symbol baseSymbol = classNode->get_parent();
+    while(baseSymbol != No_class) {
+        class__class *baseClass = dynamic_cast<class__class*>(classMap[baseSymbol]);
+        auto features = baseClass->get_features();
+        for(int i = features->first(); features->more(i); i = features->next(i)) {
+            if(dynamic_cast<attr_class*>(features->nth(i))) {
+                auto attrNode = dynamic_cast<attr_class*>(features->nth(i));
+                addid(attrNode->get_name(), ATTRIBUTE_NAME, attrNode);
+            }
+        }
+
+        baseSymbol = baseClass->get_parent();
+    }
+
     Features features = classNode->get_features();
     for(int i = features->first(); features->more(i); i = features->next(i)) {
         traverseFeature(features->nth(i), ClassNode, basic_class);
@@ -309,12 +336,20 @@ void ClassTable::traverseAttribute(Feature AttrNode, Class_ ClassNode, bool basi
     attr_class *attrNode = dynamic_cast<attr_class*>(AttrNode);
     if(!basic_class && classMap.find(attrNode->get_type_decl()) == classMap.end()) {
         semant_error(ClassNode->get_filename(), attrNode) << "undeclared type name " << attrNode->get_type_decl() << endl;
+    } else if(attrNode->get_name() == self) {
+        semant_error(ClassNode->get_filename(), attrNode) << "It is illegal to have attributes named self" << endl;
+    } else if(symbolTable.lookup(attrNode->get_name())) {
+        semant_error(ClassNode->get_filename(), attrNode) << "attribute name may not override other name" << endl;
     } else {
+        traverseExpression(attrNode->get_init(), ClassNode);
+        Symbol initType = attrNode->get_init()->get_type();
+        if(initType == SELF_TYPE) {
+            initType = dynamic_cast<class__class*>(ClassNode)->get_name();
+        }
+        if(initType != No_type && !isTypeConvertable(initType, attrNode->get_type_decl())) {
+            semant_error(ClassNode->get_filename(), attrNode) << "init expression cannot cast to type " << attrNode->get_type_decl() << endl;
+        }
         addid(attrNode->get_name(), ATTRIBUTE_NAME, attrNode);
-    }
-    traverseExpression(attrNode->get_init(), ClassNode);
-    if(attrNode->get_init()->get_type() != No_type && !isTypeConvertable(attrNode->get_init()->get_type(), attrNode->get_type_decl())) {
-        semant_error(ClassNode->get_filename(), attrNode) << "init expression  cannot cast to type " << attrNode->get_type_decl() << endl;
     }
 }
 
@@ -326,6 +361,7 @@ void ClassTable::traverseMethod(Feature MethodNode, Class_ ClassNode, bool basic
             << " in definition of function " << methodNode->get_name() << endl;
     }
     // formals
+    set<Symbol> formalSymbols;
     Formals formals = methodNode->get_formals();
     for(int i = formals->first(); formals->more(i); i = formals->next(i)) {
         Formal FormalNode = formals->nth(i);
@@ -333,17 +369,67 @@ void ClassTable::traverseMethod(Feature MethodNode, Class_ ClassNode, bool basic
         if(classMap.find(formalNode->get_type_decl()) == classMap.end()) {
             semant_error(ClassNode->get_filename(), formalNode) << "undeclared type name " << formalNode->get_type_decl() << endl;
         }
+        if(formalNode->get_type_decl() == SELF_TYPE) {
+            semant_error(ClassNode->get_filename(), formalNode) << 
+                "cannot use SELF_TYPE as formal type" << endl;
+        }
+        if(formalNode->get_name() == self) {
+            semant_error(ClassNode->get_filename(), formalNode) << 
+                "it is an error to assign to self or to bind self in a let, a case, or as a formal parameter" << endl;
+        }
+        if(formalSymbols.find(formalNode->get_name()) != formalSymbols.end()) {
+            semant_error(ClassNode->get_filename(), formalNode) << "duplicate formal name" << endl;
+        } else {
+            formalSymbols.insert(formalNode->get_name());
+        }
         addid(formalNode->get_name(), FORMAL_NAME, formalNode);
     }
 
     // body
     traverseExpression(methodNode->get_expr(), ClassNode);
+    Symbol retType = methodNode->get_return_type();
+    Symbol className = dynamic_cast<class__class*>(ClassNode)->get_name();
+    Symbol bodyType = methodNode->get_expr()->get_type();
+
+    if(bodyType != No_type && !isTypeConvertable(bodyType, retType) 
+        && (bodyType != SELF_TYPE || !isTypeConvertable(className, retType))) {
+        semant_error(ClassNode->get_filename(), methodNode) << "return type doesnot match" << endl;
+    }
+    if(retType == SELF_TYPE)
+        retType = className;
+    if(bodyType == SELF_TYPE)
+        bodyType = className;
+
+    Symbol methodName = methodNode->get_name();
+    Symbol overClassName;
+    Symbol baseClassName = dynamic_cast<class__class*>(classMap[className])->get_parent();
+    tree_node *overMethodTree = findBaseClassMethod(baseClassName, methodName, &overClassName);
+    if(overMethodTree) {
+        auto overMethodNode = dynamic_cast<method_class*>(overMethodTree);
+        bool sameSig = true;
+        Symbol overRetType = overMethodNode->get_return_type();
+        if(overRetType == SELF_TYPE)
+            overRetType = overClassName;
+        sameSig &= overRetType == retType || overMethodNode->get_return_type() == methodNode->get_return_type();
+        Formals overFormals = overMethodNode->get_formals();
+        sameSig &= methodNode->get_formals()->len() == overMethodNode->get_formals()->len();
+
+        for(int i = formals->first(), oi = overFormals->first(); sameSig && formals->more(i); 
+            i = formals->next(i), oi = overFormals->next(oi)) {
+            sameSig &=  dynamic_cast<formal_class*>(formals->nth(i))->get_type_decl() == 
+                        dynamic_cast<formal_class*>(overFormals->nth(i))->get_type_decl();
+        }
+
+        if(!sameSig) {
+            semant_error(ClassNode->get_filename(), methodNode) << "Illegal method override" << endl;
+        }
+    }
 }
 
 void ClassTable::traverseBranch(Case CaseNode, Class_ ClassNode) {
     Scope caseScope(symbolTable);
     branch_class *caseNode = dynamic_cast<branch_class*>(CaseNode);
-    if(classMap.find(caseNode->get_type_decl()) != classMap.end()) {
+    if(classMap.find(caseNode->get_type_decl()) == classMap.end()) {
         semant_error(ClassNode->get_filename(), caseNode) << "undeclared type name " << caseNode->get_type_decl() << endl;
     }
     addid(caseNode->get_name(), CASE_NAME, caseNode);
@@ -406,6 +492,11 @@ void ClassTable::traverseExpression(Expression ExpressionNode, Class_ ClassNode)
 }
 
 void ClassTable::traverseAssignExp(assign_class *exp, Class_ ClassNode) {
+    if(exp->get_name() == self) {
+        semant_error(ClassNode->get_filename(), exp) << "assignment to self error" << endl;
+        exp->set_type(SELF_TYPE);
+        return;
+    }
     auto *identifier = symbolTable.lookup(exp->get_name());
     if(!identifier) {
         semant_error(ClassNode->get_filename(), exp) << "undeclared identifier `" << exp->get_name() << "`" << endl;
@@ -417,25 +508,36 @@ void ClassTable::traverseAssignExp(assign_class *exp, Class_ ClassNode) {
             semant_error(ClassNode->get_filename(), exp) << "assignment of uncompitable type `" << idtype << "` and `" << exptype << "`" << endl;
         }
         exp->set_type(idtype);
+        if(exp->get_name() == self) {
+            semant_error(ClassNode->get_filename(), exp) << "it is an error to assign to self or to bind self in a let" << endl;
+        }
     } else {
         exp->set_type(No_type);
     }
 }
 void ClassTable::traverseStcDispatchExp(static_dispatch_class *exp, Class_ ClassNode) {
     traverseExpression(exp->get_expr(), ClassNode);
-    if(!isTypeConvertable(exp->get_expr()->get_type(), exp->get_type())) {
-        semant_error(ClassNode->get_filename(), exp) << "cannot cast " << exp->get_expr()->get_type() << " to " << exp->get_type() << endl;
+    if(!isTypeConvertable(exp->get_expr()->get_type(), exp->get_type_name())) {
+        semant_error(ClassNode->get_filename(), exp) << "cannot cast " << exp->get_expr()->get_type() << " to " << exp->get_type_name() << endl;
+        exp->set_type(No_type);
+        return;
     }
-    string compoundName = string(exp->get_type()->get_string()) + "." + string(exp->get_name()->get_string());
-    Symbol compoundSymbol = idtable.add_string(const_cast<char*>(compoundName.c_str()));
-    auto method = symbolTable.lookup(compoundSymbol);
-    if(!method) {
+    auto methodTree = findBaseClassMethod(exp->get_type_name(), exp->get_name());
+    // string compoundName = string(exp->get_type_name()->get_string()) + "." + string(exp->get_name()->get_string());
+    // Symbol compoundSymbol = idtable.add_string(const_cast<char*>(compoundName.c_str()));
+    // auto method = symbolTable.lookup(compoundSymbol);
+    if(!methodTree) {
         semant_error(ClassNode->get_filename(), exp) << "undefined method " << exp->get_name() << endl;
         exp->set_type(No_type);
         return;
     }
-    auto methodNode = dynamic_cast<method_class*>(method->second);
-    exp->set_type(methodNode->get_return_type());
+    auto methodNode = dynamic_cast<method_class*>(methodTree);
+
+    if(methodNode->get_return_type() == SELF_TYPE) {
+        exp->set_type(exp->get_expr()->get_type());
+    } else {
+        exp->set_type(methodNode->get_return_type());
+    }
     if(methodNode->get_formals()->len() != exp->get_actual()->len()) {
         semant_error(ClassNode->get_filename(), exp) << "provided parameter number is not correct" << endl;
         return;
@@ -447,22 +549,32 @@ void ClassTable::traverseStcDispatchExp(static_dispatch_class *exp, Class_ Class
         Formal formal = methodNode->get_formals()->nth(i);
         formal_class *formalNode = dynamic_cast<formal_class*>(formal);
         Symbol actual_type = actual->get_type(), formal_type = formalNode->get_type_decl();
+        if(actual_type == SELF_TYPE)
+            actual_type = dynamic_cast<class__class*>(ClassNode)->get_name();
         if(!isTypeConvertable(actual_type, formal_type)) {
-            semant_error(ClassNode->get_filename(), exp) << i << "'th actual type cannot match formal type" << endl;
+            semant_error(ClassNode->get_filename(), exp) << (i+1) << "'th actual type cannot match formal type" << endl;
         }
     }
 }
 void ClassTable::traverseDispatchExp(dispatch_class *exp, Class_ ClassNode) {
     traverseExpression(exp->get_expr(), ClassNode);
-    auto method = findBaseClassMethod(exp->get_expr()->get_type(), exp->get_name());
+    auto callerType = exp->get_expr()->get_type();
+    if(callerType == SELF_TYPE) {
+        callerType = dynamic_cast<class__class*>(ClassNode)->get_name();
+    }
+    auto method = findBaseClassMethod(callerType, exp->get_name());
     if(!method) {
         semant_error(ClassNode->get_filename(), exp) << "undefined method " << exp->get_name() << endl;
-        findBaseClassMethod(exp->get_expr()->get_type(), exp->get_name());
         exp->set_type(No_type);
         return;
     }
     auto methodNode = dynamic_cast<method_class*>(method);
-    exp->set_type(methodNode->get_return_type());
+
+    if(methodNode->get_return_type() == SELF_TYPE) {
+        exp->set_type(exp->get_expr()->get_type());
+    } else {
+        exp->set_type(methodNode->get_return_type());
+    }
     if(methodNode->get_formals()->len() != exp->get_actual()->len()) {
         semant_error(ClassNode->get_filename(), exp) << "provided parameter number is not correct" << endl;
         return;
@@ -474,8 +586,10 @@ void ClassTable::traverseDispatchExp(dispatch_class *exp, Class_ ClassNode) {
         Formal formal = methodNode->get_formals()->nth(i);
         formal_class *formalNode = dynamic_cast<formal_class*>(formal);
         Symbol actual_type = actual->get_type(), formal_type = formalNode->get_type_decl();
+        if(actual_type == SELF_TYPE)
+            actual_type = dynamic_cast<class__class*>(ClassNode)->get_name();
         if(!isTypeConvertable(actual_type, formal_type)) {
-            semant_error(ClassNode->get_filename(), exp) << i << "'th actual type cannot match formal type" << endl;
+            semant_error(ClassNode->get_filename(), exp) << (i+1) << "'th actual type cannot match formal type" << endl;
         }
     }
 }
@@ -497,13 +611,25 @@ void ClassTable::traverseLoopExp(loop_class *exp, Class_ ClassNode) {
     exp->set_type(Object);
 }
 void ClassTable::traverseTypcaseExp(typcase_class *exp, Class_ ClassNode) {
-    traverseExpression(exp, ClassNode);
+    traverseExpression(exp->get_expr(), ClassNode);
     Symbol returnType = nullptr;
     Cases cases = exp->get_cases();
+    set<Symbol> caseTypes;
     for(int i = cases->first(); cases->more(i); i = cases->next(i)) {
+        Symbol declType = dynamic_cast<branch_class*>(cases->nth(i))->get_type_decl();
+        if(caseTypes.find(declType) != caseTypes.end()) {
+            semant_error(ClassNode->get_filename(), cases->nth(i)) << "identical branch is not allowed" << endl;
+            continue;
+        } else {
+            caseTypes.insert(declType);
+        }
         traverseBranch(cases->nth(i), ClassNode);
         auto branchNode = dynamic_cast<branch_class*>(cases->nth(i));
         auto expType = branchNode->get_expr()->get_type();
+        if(branchNode->get_name() == self) {
+            semant_error(ClassNode->get_filename(), exp) << 
+                "it is an error to assign to self or to bind self in a let, a case" << endl;
+        }
         if(!returnType) {
             returnType = expType;
         } else {
@@ -523,13 +649,15 @@ void ClassTable::traverseLetExp(let_class *exp, Class_ ClassNode) {
     Scope letScope(symbolTable);
     if(classMap.find(exp->get_type_decl()) == classMap.end()) {
         semant_error(ClassNode->get_filename(), exp) << "undeclared type name " << exp->get_type_decl() << endl;
-    }
-    addid(exp->get_identifier(), LET_NAME, exp);
+    }  else if(exp->get_identifier() == self) {
+        semant_error(ClassNode->get_filename(), exp) << "it is an error to assign to self or to bind self in a let" << endl;
+    } 
 
     traverseExpression(exp->get_init(), ClassNode);
     if(exp->get_init()->get_type() != No_type && !isTypeConvertable(exp->get_init()->get_type(), exp->get_type_decl())) {
-        semant_error(ClassNode->get_filename(), exp) << "init expression  cannot cast to type " << exp->get_type_decl() << endl;
+        semant_error(ClassNode->get_filename(), exp) << "init expression cannot cast to type " << exp->get_type_decl() << endl;
     }
+    addid(exp->get_identifier(), LET_NAME, exp);
     traverseExpression(exp->get_body(), ClassNode);
     exp->set_type(exp->get_body()->get_type());
 }
@@ -539,8 +667,6 @@ void ClassTable::traversePlusExp(plus_class *exp, Class_ ClassNode) {
     traverseExpression(e2, ClassNode);
     if(e1->get_type() != Int || e2->get_type() != Int) {
         semant_error(ClassNode->get_filename(), exp) << "plus operand must be Int" << endl;
-        traverseExpression(e1, ClassNode);
-        traverseExpression(e2, ClassNode);
     }
     exp->set_type(Int);
 }
@@ -611,10 +737,10 @@ void ClassTable::traverseLeqExp(leq_class *exp, Class_ ClassNode) {
 void ClassTable::traverseCompExp(comp_class *exp, Class_ ClassNode) {
     auto e1 = exp->get_e1();
     traverseExpression(e1, ClassNode);
-    if(e1->get_type() != Int) {
-        semant_error(ClassNode->get_filename(), exp) << "neg operand must be Int" << endl;
+    if(e1->get_type() != Bool) {
+        semant_error(ClassNode->get_filename(), exp) << "comp operand must be Bool" << endl;
     }
-    exp->set_type(Int);
+    exp->set_type(Bool);
 }
 void ClassTable::traverseIntConstExp(int_const_class *exp, Class_ ClassNode) {
     exp->set_type(Int);
@@ -674,8 +800,7 @@ void ClassTable::traverseObjectExp(object_class *exp, Class_ ClassNode) {
     }
 
     if(symbolEt->first == SELF_NAME) {
-        auto node = dynamic_cast<class__class*>(symbolEt->second);
-        exp->set_type(node->get_name());
+        exp->set_type(SELF_TYPE);
     }
 }
 
@@ -690,12 +815,20 @@ bool ClassTable::isBaseClass(Symbol typeBase, Symbol typeDerv) {
 }
 
 tree_node *ClassTable::findBaseClassMethod(Symbol dervClass, Symbol methodName) {
+    return findBaseClassMethod(dervClass, methodName, nullptr);
+}
+
+tree_node *ClassTable::findBaseClassMethod(Symbol dervClass, Symbol methodName, Symbol *className) {
     for(Symbol baseClass = dervClass; baseClass != No_class; baseClass = base(baseClass)) {
-      string compoundName = string(baseClass->get_string()) + "." + string(methodName->get_string());
-      Symbol compoundSymbol = idtable.add_string(const_cast<char*>(compoundName.c_str()));
-      auto method = symbolTable.lookup(compoundSymbol);
-      if(method)
-        return method->second;
+        string compoundName = string(baseClass->get_string()) + "." + string(methodName->get_string());
+        Symbol compoundSymbol = idtable.add_string(const_cast<char*>(compoundName.c_str()));
+        auto method = symbolTable.lookup(compoundSymbol);
+        if(method){
+            if(className) {
+                *className = baseClass;
+            }
+            return method->second;
+        }
     }
     return nullptr;
 }

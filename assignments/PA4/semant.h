@@ -86,6 +86,7 @@ private:
     return dynamic_cast<class__class*>(classMap[derv])->get_parent();
   }
   tree_node *findBaseClassMethod(Symbol dervClass, Symbol methodName);
+  tree_node *findBaseClassMethod(Symbol dervClass, Symbol methodName, Symbol *className);
   Symbol getFirstCommonBase(Symbol classA, Symbol classB);
   
   
