@@ -48,7 +48,8 @@ private:
     ATTRIBUTE_NAME,
     FORMAL_NAME,
     LET_NAME,
-    CASE_NAME
+    CASE_NAME,
+    SELF_NAME // self
   };
 
   /**
@@ -58,6 +59,35 @@ private:
   void addid(Symbol symbol, NameType nameType, tree_node *node) {
     symbolTable.addid(symbol, new pair<NameType, tree_node*>(nameType, node));
   }
+
+  Symbol getidtype(NameType type, tree_node *node) {
+    assert(type == ATTRIBUTE_NAME || type == FORMAL_NAME || type == LET_NAME || type == CASE_NAME);
+    assert(node);
+
+    switch (type)
+    {
+    case ATTRIBUTE_NAME:
+      return dynamic_cast<attr_class*>(node)->get_type_decl();
+    case FORMAL_NAME:
+      return dynamic_cast<formal_class*>(node)->get_type_decl();
+    case LET_NAME:
+      return dynamic_cast<let_class*>(node)->get_type_decl();
+    case CASE_NAME:
+      return dynamic_cast<branch_class*>(node)->get_type_decl();
+    default:
+      assert("wrong identifier type" && false);
+    }
+  }
+  bool isBaseClass(Symbol typeBase, Symbol typeDerv);
+  bool isTypeConvertable(Symbol source, Symbol target) {
+    return source == target || isBaseClass(target, source);
+  }
+  Symbol base(Symbol derv) {
+    return dynamic_cast<class__class*>(classMap[derv])->get_parent();
+  }
+  tree_node *findBaseClassMethod(Symbol dervClass, Symbol methodName);
+  Symbol getFirstCommonBase(Symbol classA, Symbol classB);
+  
   
   using Scope = ScopeGuard<decltype(symbolTable)>;
   Scope globalScope;
@@ -70,37 +100,38 @@ private:
    */
   bool checkInheritance();
 
-  void traverseClass(Class_ ClassNode);
-  void traverseFeature(Feature FeatureNode);
-  void traverseAttribute(Feature AttrNode);
-  void traverseMethod(Feature MethodNode);
-  void traverseBranch(Case CaseNode);
+  void traverseMethodSignature(Class_ ClassNode, Class_);
+  void traverseClass(Class_ ClassNode, Class_, bool basic_class);
+  void traverseFeature(Feature FeatureNode, Class_ ClassNode, bool basic_class);
+  void traverseAttribute(Feature AttrNode, Class_ ClassNode, bool basic_class);
+  void traverseMethod(Feature MethodNode, Class_ ClassNode, bool basic_class);
+  void traverseBranch(Case CaseNode, Class_ ClassNode);
 
-  void traverseExpression(Expression ExpressionNode);
-  void traverseAssignExp(assign_class *assign_exp);
-  void traverseStcDispatchExp(static_dispatch_class *assign_exp);
-  void traverseDispatchExp(dispatch_class *assign_exp);
-  void traverseCondExp(cond_class *exp);
-  void traverseLoopExp(loop_class *exp);
-  void traverseTypcaseExp(typcase_class *exp);
-  void traverseBlockExp(block_class *exp);
-  void traverseLetExp(let_class *exp);
-  void traversePlusExp(plus_class *exp);
-  void traverseSubExp(sub_class *exp);
-  void traverseMulExp(mul_class *exp);
-  void traverseDivideExp(divide_class *exp);
-  void traverseNegExp(neg_class *exp);
-  void traverseLtExp(lt_class *exp);
-  void traverseEqExp(eq_class *exp);
-  void traverseLeqExp(leq_class *exp);
-  void traverseCompExp(comp_class *exp);
-  void traverseIntConstExp(int_const_class *exp);
-  void traverseBoolConstExp(bool_const_class *exp);
-  void traverseStrConstExp(string_const_class *exp);
-  void traverseNewExp(new__class *exp);
-  void traverseIsvoidExp(isvoid_class *exp);
-  void traverseNoexpExp(no_expr_class *exp);
-  void traverseObjectExp(object_class *exp);
+  void traverseExpression(Expression ExpressionNode, Class_ ClassNode);
+  void traverseAssignExp(assign_class *assign_exp, Class_ ClassNode);
+  void traverseStcDispatchExp(static_dispatch_class *assign_exp, Class_ ClassNode);
+  void traverseDispatchExp(dispatch_class *assign_exp, Class_ ClassNode);
+  void traverseCondExp(cond_class *exp, Class_ ClassNode);
+  void traverseLoopExp(loop_class *exp, Class_ ClassNode);
+  void traverseTypcaseExp(typcase_class *exp, Class_ ClassNode);
+  void traverseBlockExp(block_class *exp, Class_ ClassNode);
+  void traverseLetExp(let_class *exp, Class_ ClassNode);
+  void traversePlusExp(plus_class *exp, Class_ ClassNode);
+  void traverseSubExp(sub_class *exp, Class_ ClassNode);
+  void traverseMulExp(mul_class *exp, Class_ ClassNode);
+  void traverseDivideExp(divide_class *exp, Class_ ClassNode);
+  void traverseNegExp(neg_class *exp, Class_ ClassNode);
+  void traverseLtExp(lt_class *exp, Class_ ClassNode);
+  void traverseEqExp(eq_class *exp, Class_ ClassNode);
+  void traverseLeqExp(leq_class *exp, Class_ ClassNode);
+  void traverseCompExp(comp_class *exp, Class_ ClassNode);
+  void traverseIntConstExp(int_const_class *exp, Class_ ClassNode);
+  void traverseBoolConstExp(bool_const_class *exp, Class_ ClassNode);
+  void traverseStrConstExp(string_const_class *exp, Class_ ClassNode);
+  void traverseNewExp(new__class *exp, Class_ ClassNode);
+  void traverseIsvoidExp(isvoid_class *exp, Class_ ClassNode);
+  void traverseNoexpExp(no_expr_class *exp, Class_ ClassNode);
+  void traverseObjectExp(object_class *exp, Class_ ClassNode);
 
 public:
   ClassTable(Classes);

@@ -302,6 +302,9 @@ public:
    Expression copy_Expression();
    void dump(ostream& stream, int n);
 
+   GETTER(name)
+   GETTER(expr)
+
 #ifdef Expression_SHARED_EXTRAS
    Expression_SHARED_EXTRAS
 #endif
@@ -328,6 +331,11 @@ public:
    Expression copy_Expression();
    void dump(ostream& stream, int n);
 
+   GETTER(expr)
+   GETTER(type_name)
+   GETTER(name)   
+   GETTER(actual)
+
 #ifdef Expression_SHARED_EXTRAS
    Expression_SHARED_EXTRAS
 #endif
@@ -351,6 +359,10 @@ public:
    }
    Expression copy_Expression();
    void dump(ostream& stream, int n);
+
+   GETTER(expr)
+   GETTER(name)
+   GETTER(actual)
 
 #ifdef Expression_SHARED_EXTRAS
    Expression_SHARED_EXTRAS
@@ -376,6 +388,10 @@ public:
    Expression copy_Expression();
    void dump(ostream& stream, int n);
 
+   GETTER(pred)
+   GETTER(then_exp)
+   GETTER(else_exp)
+
 #ifdef Expression_SHARED_EXTRAS
    Expression_SHARED_EXTRAS
 #endif
@@ -397,6 +413,9 @@ public:
    }
    Expression copy_Expression();
    void dump(ostream& stream, int n);
+
+   GETTER(pred)
+   GETTER(body)
 
 #ifdef Expression_SHARED_EXTRAS
    Expression_SHARED_EXTRAS
@@ -442,6 +461,8 @@ public:
    }
    Expression copy_Expression();
    void dump(ostream& stream, int n);
+
+   GETTER(body)
 
 #ifdef Expression_SHARED_EXTRAS
    Expression_SHARED_EXTRAS
@@ -496,6 +517,9 @@ public:
    Expression copy_Expression();
    void dump(ostream& stream, int n);
 
+   GETTER(e1)
+   GETTER(e2)
+
 #ifdef Expression_SHARED_EXTRAS
    Expression_SHARED_EXTRAS
 #endif
@@ -517,6 +541,9 @@ public:
    }
    Expression copy_Expression();
    void dump(ostream& stream, int n);
+
+   GETTER(e1)
+   GETTER(e2)
 
 #ifdef Expression_SHARED_EXTRAS
    Expression_SHARED_EXTRAS
@@ -540,6 +567,9 @@ public:
    Expression copy_Expression();
    void dump(ostream& stream, int n);
 
+   GETTER(e1)
+   GETTER(e2)
+
 #ifdef Expression_SHARED_EXTRAS
    Expression_SHARED_EXTRAS
 #endif
@@ -562,6 +592,9 @@ public:
    Expression copy_Expression();
    void dump(ostream& stream, int n);
 
+   GETTER(e1)
+   GETTER(e2)
+
 #ifdef Expression_SHARED_EXTRAS
    Expression_SHARED_EXTRAS
 #endif
@@ -581,6 +614,8 @@ public:
    }
    Expression copy_Expression();
    void dump(ostream& stream, int n);
+
+   GETTER(e1)
 
 #ifdef Expression_SHARED_EXTRAS
    Expression_SHARED_EXTRAS
@@ -604,6 +639,9 @@ public:
    Expression copy_Expression();
    void dump(ostream& stream, int n);
 
+   GETTER(e1)
+   GETTER(e2)
+
 #ifdef Expression_SHARED_EXTRAS
    Expression_SHARED_EXTRAS
 #endif
@@ -625,6 +663,9 @@ public:
    }
    Expression copy_Expression();
    void dump(ostream& stream, int n);
+
+   GETTER(e1)
+   GETTER(e2)
 
 #ifdef Expression_SHARED_EXTRAS
    Expression_SHARED_EXTRAS
@@ -648,6 +689,9 @@ public:
    Expression copy_Expression();
    void dump(ostream& stream, int n);
 
+   GETTER(e1)
+   GETTER(e2)
+
 #ifdef Expression_SHARED_EXTRAS
    Expression_SHARED_EXTRAS
 #endif
@@ -667,6 +711,8 @@ public:
    }
    Expression copy_Expression();
    void dump(ostream& stream, int n);
+
+   GETTER(e1)
 
 #ifdef Expression_SHARED_EXTRAS
    Expression_SHARED_EXTRAS
@@ -688,6 +734,8 @@ public:
    Expression copy_Expression();
    void dump(ostream& stream, int n);
 
+   GETTER(token)
+
 #ifdef Expression_SHARED_EXTRAS
    Expression_SHARED_EXTRAS
 #endif
@@ -707,6 +755,8 @@ public:
    }
    Expression copy_Expression();
    void dump(ostream& stream, int n);
+
+   GETTER(val)
 
 #ifdef Expression_SHARED_EXTRAS
    Expression_SHARED_EXTRAS
@@ -728,6 +778,8 @@ public:
    Expression copy_Expression();
    void dump(ostream& stream, int n);
 
+   GETTER(token)
+
 #ifdef Expression_SHARED_EXTRAS
    Expression_SHARED_EXTRAS
 #endif
@@ -748,6 +800,8 @@ public:
    Expression copy_Expression();
    void dump(ostream& stream, int n);
 
+   GETTER(type_name)
+
 #ifdef Expression_SHARED_EXTRAS
    Expression_SHARED_EXTRAS
 #endif
@@ -767,6 +821,8 @@ public:
    }
    Expression copy_Expression();
    void dump(ostream& stream, int n);
+
+   GETTER(e1)
 
 #ifdef Expression_SHARED_EXTRAS
    Expression_SHARED_EXTRAS
@@ -805,6 +861,8 @@ public:
    }
    Expression copy_Expression();
    void dump(ostream& stream, int n);
+
+   GETTER(name)
 
 #ifdef Expression_SHARED_EXTRAS
    Expression_SHARED_EXTRAS

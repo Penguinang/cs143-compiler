@@ -19,3 +19,4 @@ assignments/PA4/symtab_example
 assignments/PA*/*.s
 *.input
 .vscode/
+.cquery_cache
