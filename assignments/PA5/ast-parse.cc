@@ -60,7 +60,7 @@
 
 /* Substitute the variable and function names.  */
 #define yyparse ast_yyparse
-#define yylex   ast_yylex
+// #define yylex   ast_yylex
 #define yyerror ast_yyerror
 #define yylval  ast_yylval
 #define yychar  ast_yychar
@@ -161,7 +161,7 @@
 
 void ast_yyerror(char *);
 extern int node_lineno;
-extern int yylex();           /* the entry point to the lexer  */
+extern "C" int yylex();           /* the entry point to the lexer  */
 Program ast_root;             /* the result of the parse  */
 Classes parse_results;        /* for use in parsing multiple files */
 int omerrs = 0;               /* number of errors in lexing and parsing */
