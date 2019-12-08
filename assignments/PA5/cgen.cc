@@ -115,7 +115,9 @@ static char *gc_collect_names[] =
 //  on the two booleans, which are given global names here.
 BoolConst falsebool(FALSE);
 BoolConst truebool(TRUE);
-
+IntEntryP intDefault = inttable.add_int(0);
+StringEntryP stringDefault = stringtable.add_string("");
+IntEntryP otherDefault = inttable.add_int(0);
 //*********************************************************
 //
 // Define method for code generation
@@ -403,6 +405,7 @@ void StringEntry::code_def(ostream& s, int stringclasstag)
 
 
  /***** Add dispatch information for class String ******/
+  emit_disptable_ref(Str, s);
 
       s << endl;                                              // dispatch table
       s << WORD;  lensym->code_ref(s);  s << endl;            // string length
@@ -445,7 +448,7 @@ void IntEntry::code_def(ostream &s, int intclasstag)
       << WORD; 
 
  /***** Add dispatch information for class Int ******/
-
+  emit_disptable_ref(Int, s);
       s << endl;                                          // dispatch table
       s << WORD << str << endl;                           // integer value
 }
@@ -489,7 +492,7 @@ void BoolConst::code_def(ostream& s, int boolclasstag)
       << WORD;
 
  /***** Add dispatch information for class Bool ******/
-
+  emit_disptable_ref(Bool, s);
       s << endl;                                            // dispatch table
       s << WORD << val << endl;                             // value (0 or 1)
 }
@@ -616,12 +619,148 @@ void CgenClassTable::code_constants()
   code_bools(boolclasstag);
 }
 
+void CgenClassTable::code_class_nameTab() {
+  str << CLASSNAMETAB << LABEL;
+  for(auto l = nds; l; l = l->tl()) {
+    auto nameEntry = static_cast<StringEntry*>(l->hd()->get_name());
+    str << WORD;
+    nameEntry->code_ref(str);
+    str << endl;
+  }
+}
+void CgenClassTable::code_class_objTab() {
+  str << CLASSOBJTAB << LABEL;
+  for(auto l = nds; l; l = l->tl()) {
+    str << WORD;
+    emit_protobj_ref(l->hd()->get_name(), str);
+    str << endl;
+    str << WORD;
+    emit_init_ref(l->hd()->get_name(), str);
+    str << endl;
+  }
+}
+void CgenClassTable::code_dispTab() {
+  for(auto l = nds; l; l = l->tl()) {
+    auto classNode = l->hd();
+    emit_disptable_ref(classNode->get_name(), str);
+    str << LABEL;
+    code_class_dispTab(classNode);
+  }
+}
+void CgenClassTable::code_class_dispTab(CgenNode *classNode) {
+  if(classNode->get_parentnd()) {
+    code_class_dispTab(classNode->get_parentnd());
+  }
+  auto features = classNode->get_features();
+  for(int i = features->first(); features->more(i); i = features->next(i)) {
+    if(auto methodNode = dynamic_cast<method_class*>(features->nth(i))) {
+      str << WORD;
+      emit_method_ref(classNode->get_name(), methodNode->get_name(), str);
+      str << endl;
+    }
+  }
+}
+
+void CgenClassTable::code_protObjs() {
+  for(auto l = nds; l; l = l->tl()) {
+    auto classNode = l->hd();
+
+    str << WORD << "-1" << endl;
+    emit_protobj_ref(classNode->get_name(), str);
+    str << LABEL                                              // label
+        << WORD << classNode->get_classTag() << endl;          // tag
+    int attr_count = 0;
+    auto features = classNode->get_features();
+    for(int i = features->first(); features->more(i); i = features->next(i)) {
+      if(dynamic_cast<attr_class*>(features->nth(i))) {
+        ++attr_count;
+      }
+    }
+    str << WORD << (DEFAULT_OBJFIELDS + attr_count) << endl // size
+        << WORD; emit_disptable_ref(classNode->get_name(), str); 
+    str << endl; // dispatch table
+    for(int i = features->first(); features->more(i); i = features->next(i)) {
+      if(auto attrNode = dynamic_cast<attr_class*>(features->nth(i))) {
+        if(attrNode->get_type_decl() == Int) {
+          str << WORD; intDefault->code_ref(str); str << endl;
+        } else if(attrNode->get_type_decl() == Bool) {
+          str << WORD; falsebool.code_ref(str); str << endl;
+        } else if(attrNode->get_type_decl() == Int) {
+          str << WORD; stringDefault->code_ref(str); str << endl;
+        } else {
+          str << WORD; otherDefault->code_ref(str); str << endl; 
+        }
+      }
+    }
+  }
+}
+
+void CgenClassTable::code_initializer() {
+  for(auto l = nds; l; l = l->tl()) {
+    auto classNode = l->hd();
+    emit_init_ref(classNode->get_name(), str);
+    str << LABEL;
+    code_class_initializer(classNode);
+  }
+}
+void CgenClassTable::code_class_initializer(CgenNode *classNode) {
+  code_method_head(3);
+  emit_move(SELF, ACC, str);
+  if(classNode->get_name() != Object)
+    str << JAL << classNode->get_parent() << CLASSINIT_SUFFIX << endl;
+  auto features = classNode->get_features();
+  int fieldOffset = DEFAULT_OBJFIELDS;
+  for(int i = features->first(); features->more(i); i = features->next(i)) {
+    if(auto attrNode = dynamic_cast<attr_class*>(features->nth(i))) {
+      auto initNode = attrNode->get_init();
+      if(initNode != no_expr()) {
+        initNode->code(str);
+        emit_store(ACC, fieldOffset, SELF, str);
+      } else {
+        // inited by prototype object
+      }
+    }
+    fieldOffset += 1;
+  }
+
+  emit_move(ACC, SELF, str);
+  code_method_tail(3, 0);
+}
+void CgenClassTable::code_methods() {
+}
+void CgenClassTable::code_class_methods(CgenNode *classNode) {
+}
+
+void CgenClassTable::code_method_head(int frameSizeWord) {
+  int frameSizeByte = frameSizeWord * WORD_SIZE;
+  // create stack frame
+  emit_addiu(SP, SP, -frameSizeByte, str);
+  // save registers
+  emit_store(FP, frameSizeWord, SP, str);
+  emit_store(SELF, frameSizeWord-1, SP, str);
+  emit_store(RA, frameSizeWord-2, SP, str);
+  // update frame pointer
+  emit_addiu(FP, SP, 4, str);
+}
+void CgenClassTable::code_method_tail(int frameSizeWord, int localStackSizeWord) {
+  int frameSizeByte = frameSizeWord * WORD_SIZE, localStackSizeByte = localStackSizeWord * 4;
+  // load registers
+  emit_load(FP, frameSizeWord, SP, str);
+  emit_load(SELF, frameSizeWord-1, SP, str);
+  emit_load(RA, frameSizeWord-2, SP, str);
+  // destroy stack frame
+  emit_addiu(SP, SP, frameSizeByte + localStackSizeByte, str);
+  emit_return(str);
+}
+
+
+
 
 CgenClassTable::CgenClassTable(Classes classes, ostream& s) : nds(NULL) , str(s)
 {
-   stringclasstag = 0 /* Change to your String class tag here */;
-   intclasstag =    0 /* Change to your Int class tag here */;
-   boolclasstag =   0 /* Change to your Bool class tag here */;
+   stringclasstag = STRING_CLASS_TAG /* Change to your String class tag here */;
+   intclasstag =    INT_CLASS_TAG /* Change to your Int class tag here */;
+   boolclasstag =   BOOL_CLASS_TAG /* Change to your Bool class tag here */;
 
    enterscope();
    if (cgen_debug) cout << "Building CgenClassTable" << endl;
@@ -650,13 +789,13 @@ void CgenClassTable::install_basic_classes()
 //
   addid(No_class,
 	new CgenNode(class_(No_class,No_class,nil_Features(),filename),
-			    Basic,this));
+			    Basic,this, NO_CLASS_TAG));
   addid(SELF_TYPE,
 	new CgenNode(class_(SELF_TYPE,No_class,nil_Features(),filename),
-			    Basic,this));
+			    Basic,this, NO_CLASS_TAG));
   addid(prim_slot,
 	new CgenNode(class_(prim_slot,No_class,nil_Features(),filename),
-			    Basic,this));
+			    Basic,this, NO_CLASS_TAG));
 
 // 
 // The Object class has no parent class. Its methods are
@@ -677,7 +816,7 @@ void CgenClassTable::install_basic_classes()
            single_Features(method(type_name, nil_Formals(), Str, no_expr()))),
            single_Features(method(copy, nil_Formals(), SELF_TYPE, no_expr()))),
 	   filename),
-    Basic,this));
+    Basic,this, OBJECT_CLASS_TAG));
 
 // 
 // The IO class inherits from Object. Its methods are
@@ -700,7 +839,7 @@ void CgenClassTable::install_basic_classes()
             single_Features(method(in_string, nil_Formals(), Str, no_expr()))),
             single_Features(method(in_int, nil_Formals(), Int, no_expr()))),
 	   filename),	    
-    Basic,this));
+    Basic,this, IO_CLASS_TAG));
 
 //
 // The Int class has no methods and only a single attribute, the
@@ -712,7 +851,7 @@ void CgenClassTable::install_basic_classes()
 	    Object,
             single_Features(attr(val, prim_slot, no_expr())),
 	    filename),
-     Basic,this));
+     Basic,this, INT_CLASS_TAG));
 
 //
 // Bool also has only the "val" slot.
@@ -720,7 +859,7 @@ void CgenClassTable::install_basic_classes()
     install_class(
      new CgenNode(
       class_(Bool, Object, single_Features(attr(val, prim_slot, no_expr())),filename),
-      Basic,this));
+      Basic,this, BOOL_CLASS_TAG));
 
 //
 // The class Str has a number of slots and operations:
@@ -751,7 +890,7 @@ void CgenClassTable::install_basic_classes()
 				   Str, 
 				   no_expr()))),
 	     filename),
-        Basic,this));
+        Basic,this, STRING_CLASS_TAG));
 
 }
 
@@ -777,8 +916,9 @@ void CgenClassTable::install_class(CgenNodeP nd)
 
 void CgenClassTable::install_classes(Classes cs)
 {
+  int classTag = USER_CLASS_TAG_OFFSET;
   for(int i = cs->first(); cs->more(i); i = cs->next(i))
-    install_class(new CgenNode(cs->nth(i),NotBasic,this));
+    install_class(new CgenNode(cs->nth(i),NotBasic,this, classTag++));
 }
 
 //
@@ -833,6 +973,10 @@ void CgenClassTable::code()
 //                   - class_nameTab
 //                   - dispatch tables
 //
+  code_class_nameTab();
+  code_class_objTab();
+  code_dispTab();
+  code_protObjs();
 
   if (cgen_debug) cout << "coding global text" << endl;
   code_global_text();
@@ -841,6 +985,9 @@ void CgenClassTable::code()
 //                   - object initializer
 //                   - the class methods
 //                   - etc...
+
+  code_initializer();
+  code_methods();
 
 }
 
@@ -857,11 +1004,12 @@ CgenNodeP CgenClassTable::root()
 //
 ///////////////////////////////////////////////////////////////////////
 
-CgenNode::CgenNode(Class_ nd, Basicness bstatus, CgenClassTableP ct) :
+CgenNode::CgenNode(Class_ nd, Basicness bstatus, CgenClassTableP ct, int classTag) :
    class__class((const class__class &) *nd),
    parentnd(NULL),
    children(NULL),
-   basic_status(bstatus)
+   basic_status(bstatus),
+   classTag(classTag)
 { 
    stringtable.add_string(name->get_string());          // Add class name to string table
 }

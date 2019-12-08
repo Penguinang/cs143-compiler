@@ -8,6 +8,7 @@ enum Basicness     {Basic, NotBasic};
 #define TRUE 1
 #define FALSE 0
 
+
 class CgenClassTable;
 typedef CgenClassTable *CgenClassTableP;
 
@@ -32,6 +33,19 @@ private:
    void code_select_gc();
    void code_constants();
 
+   void code_class_nameTab();
+   void code_class_objTab();
+   void code_dispTab();
+   void code_class_dispTab(CgenNode *classNode);
+   void code_protObjs();
+   
+   void code_initializer();
+   void code_class_initializer(CgenNode *classNode);
+   void code_methods();
+   void code_class_methods(CgenNode *classNode);
+   void code_method_head(int frameSizeWord);
+   void code_method_tail(int frameSizeWord, int localStackSizeWord);
+
 // The following creates an inheritance graph from
 // a list of classes.  The graph is implemented as
 // a tree of `CgenNode', and class names are placed
@@ -48,6 +62,13 @@ public:
    CgenNodeP root();
 };
 
+int constexpr NO_CLASS_TAG = -1;
+int constexpr OBJECT_CLASS_TAG = 0;
+int constexpr IO_CLASS_TAG = 1;
+int constexpr INT_CLASS_TAG = 2;
+int constexpr BOOL_CLASS_TAG = 3;
+int constexpr STRING_CLASS_TAG = 4;
+int constexpr USER_CLASS_TAG_OFFSET = 5;
 
 class CgenNode : public class__class {
 private: 
@@ -55,17 +76,21 @@ private:
    List<CgenNode> *children;                  // Children of class
    Basicness basic_status;                    // `Basic' if class is basic
                                               // `NotBasic' otherwise
+   int classTag;
 
 public:
    CgenNode(Class_ c,
             Basicness bstatus,
-            CgenClassTableP class_table);
+            CgenClassTableP class_table,
+            int classTag);
 
    void add_child(CgenNodeP child);
    List<CgenNode> *get_children() { return children; }
    void set_parentnd(CgenNodeP p);
    CgenNodeP get_parentnd() { return parentnd; }
    int basic() { return (basic_status == Basic); }
+
+   GETTER(classTag)
 };
 
 class BoolConst 
