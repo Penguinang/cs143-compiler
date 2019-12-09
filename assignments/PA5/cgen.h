@@ -1,8 +1,12 @@
+#include <algorithm>
+using std::swap;
+
 #include <assert.h>
 #include <stdio.h>
 #include "emit.h"
 #include "cool-tree.h"
 #include "symtab.h"
+
 
 enum Basicness     {Basic, NotBasic};
 #define TRUE 1
@@ -15,6 +19,9 @@ typedef CgenClassTable *CgenClassTableP;
 class CgenNode;
 typedef CgenNode *CgenNodeP;
 
+class NameNode;
+using NameNodeP = NameNode*;
+
 class CgenClassTable : public SymbolTable<Symbol,CgenNode> {
 private:
    List<CgenNode> *nds;
@@ -23,6 +30,13 @@ private:
    int intclasstag;
    int boolclasstag;
 
+    // 对象符号表，保存地址
+    // 1. formal         sp + offset
+    // 2. attribute      self + offset
+    // 3. let            sp + offset
+    // 4. case           sp + offset
+    SymbolTable<Symbol, NameNode> names;
+    friend class NameScope;
 
 // The following methods emit code for
 // constants and global declarations.
@@ -43,6 +57,7 @@ private:
    void code_class_initializer(CgenNode *classNode);
    void code_methods();
    void code_class_methods(CgenNode *classNode);
+   void code_method(CgenNode *classNode, method_class *methodNode);
    void code_method_head(int frameSizeWord);
    void code_method_tail(int frameSizeWord, int localStackSizeWord);
 
@@ -60,6 +75,15 @@ public:
    CgenClassTable(Classes, ostream& str);
    void code();
    CgenNodeP root();
+   
+   auto &get_names() {
+       return names;
+   }
+
+   void bindObjectName(Symbol name, char *reg, int offset);
+   void bindObjectName(Symbol name, char *reg);
+   void unbindObjectName(Symbol name);
+   void getNameAddress(Symbol name, char *reg, ostream &s);
 };
 
 int constexpr NO_CLASS_TAG = -1;
@@ -78,6 +102,25 @@ private:
                                               // `NotBasic' otherwise
    int classTag;
 
+   bool internal_find_method_index(Symbol name, int &start) {
+       if(get_parentnd()) {
+           if(get_parentnd()->internal_find_method_index(name, start)) {
+               return true;
+           } 
+       }
+
+       for(int i = features->first(); features->more(i); i = features->next(i)) {
+           if(auto methodNode = dynamic_cast<method_class*>(features->nth(i))) {
+               if(methodNode->get_name() == name) {
+                   return true;
+               } else {
+                   ++ start;
+               }
+           }
+       }
+
+       return false;
+   }
 public:
    CgenNode(Class_ c,
             Basicness bstatus,
@@ -89,6 +132,15 @@ public:
    void set_parentnd(CgenNodeP p);
    CgenNodeP get_parentnd() { return parentnd; }
    int basic() { return (basic_status == Basic); }
+
+   int find_method_index(Symbol name) {
+       int start = 0;
+       if(!internal_find_method_index(name, start)) {
+           cerr << "no method " << name;
+           assert(false);
+       }
+       return start;
+   }
 
    GETTER(classTag)
 };
@@ -103,3 +155,53 @@ class BoolConst
   void code_ref(ostream&) const;
 };
 
+class NameNode {
+  public:
+    virtual void getAddress(char *reg, ostream &s) = 0;
+};
+// address stored in register
+class RegisterName : public NameNode{
+    char *reg;
+  public:
+    RegisterName(char *reg) : reg(reg) {}
+    virtual void getAddress(char *reg, ostream &s);
+};
+// address stored in memory
+class MemoryName : public NameNode{
+    char *reg;
+    int offset;
+  public:
+    MemoryName(char const *reg, int offset) : reg(const_cast<char*>(reg)), offset(offset) {}
+    virtual void getAddress(char *reg, ostream &s);
+};
+
+class StackUsage {
+    ostream &s;
+    int allocatedWord = 0;
+  public:
+    StackUsage(ostream &s) : s(s) {}
+    ~StackUsage();
+    void push(char *reg);
+};
+
+class StackSizeTracker {
+    int lastSize;
+    int &curSize;
+  public:
+    StackSizeTracker(int &curSize) : lastSize(0), curSize(curSize){
+        swap(lastSize, curSize);
+    }
+    ~StackSizeTracker() {
+        swap(lastSize, curSize);
+    }
+};
+class NameScope {
+    CgenClassTable *classTable;
+  public:
+    NameScope(CgenClassTable *classTable) : classTable(classTable) {
+        classTable->names.enterscope();
+    }
+    ~NameScope() {
+        classTable->names.exitscope();
+    }
+};

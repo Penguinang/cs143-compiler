@@ -106,3 +106,6 @@
 #define BGT      "\tbgt\t"
 
 
+
+#define XOR     "\txor\t"
+#define XORI    "\txori\t"

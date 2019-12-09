@@ -92,17 +92,27 @@ virtual void dump_with_types(ostream& ,int) = 0;
 void dump_with_types(ostream& ,int);
 
 
+class NameNode;
+template<typename S, typename N>
+class SymbolTable;
+class CgenClassTable;
+class CgenNode;
+struct ExpressionContext {
+	CgenClassTable *classTable;
+	CgenNode *classNode;
+};
+
 #define Expression_EXTRAS                    \
 Symbol type;                                 \
 Symbol get_type() { return type; }           \
 Expression set_type(Symbol s) { type = s; return this; } \
-virtual void code(ostream&) = 0; \
+virtual void code(ostream&, ExpressionContext&) = 0; \
 virtual void dump_with_types(ostream&,int) = 0;  \
 void dump_type(ostream&, int);               \
 Expression_class() { type = (Symbol) NULL; }
 
 #define Expression_SHARED_EXTRAS           \
-void code(ostream&); 			   \
+void code(ostream&, ExpressionContext&); 			   \
 void dump_with_types(ostream&,int); 
 
 

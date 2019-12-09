@@ -193,6 +193,9 @@ public:
    void dump(ostream& stream, int n);
 
    GETTER(name)
+   GETTER(formals)
+   GETTER(return_type)
+   GETTER(expr)
 
 #ifdef Feature_SHARED_EXTRAS
    Feature_SHARED_EXTRAS
@@ -363,6 +366,10 @@ public:
    }
    Expression copy_Expression();
    void dump(ostream& stream, int n);
+
+   GETTER(pred)
+   GETTER(then_exp)
+   GETTER(else_exp)
 
 #ifdef Expression_SHARED_EXTRAS
    Expression_SHARED_EXTRAS
@@ -747,6 +754,8 @@ public:
    }
    Expression copy_Expression();
    void dump(ostream& stream, int n);
+
+   GETTER(e1)
 
 #ifdef Expression_SHARED_EXTRAS
    Expression_SHARED_EXTRAS

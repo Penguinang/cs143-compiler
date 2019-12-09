@@ -20,3 +20,4 @@ assignments/PA*/*.s
 *.input
 .vscode/
 .cquery_cache
+assignments/PA5/example.cl
