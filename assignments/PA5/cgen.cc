@@ -22,12 +22,15 @@
 //
 //**************************************************************
 
+#include <stack>
+using std::stack;
+
 #include "cgen.h"
 #include "cgen_gc.h"
 
 extern void emit_string_constant(ostream &str, char *s);
 extern int cgen_debug;
-static int curSpFpSize = 0;
+static int curSpFpSize = 0; // by word
 
 //
 // Three symbols from the semantic analyzer (semant.cc) are used.
@@ -89,9 +92,8 @@ static char *gc_collect_names[] = {"_NoGC_Collect", "_GenGC_Collect",
 //  on the two booleans, which are given global names here.
 BoolConst falsebool(FALSE);
 BoolConst truebool(TRUE);
-IntEntryP intDefault = inttable.add_int(0);
-StringEntryP stringDefault = stringtable.add_string("");
-IntEntryP otherDefault = inttable.add_int(0);
+IntEntryP intDefault;
+StringEntryP stringDefault;
 
 int curLabel = 1;
 
@@ -297,7 +299,7 @@ static void emit_branch(int l, ostream &s) {
 static void emit_push(char *reg, ostream &str) {
     emit_store(reg, 0, SP, str);
     emit_addiu(SP, SP, -4, str);
-    curSpFpSize -= -4;
+    curSpFpSize -= -1;
 }
 
 //
@@ -323,7 +325,7 @@ static void emit_test_collector(ostream &s) {
     emit_move(A1, ZERO, s); // allocate nothing
     s << JAL << gc_collect_names[cgen_Memmgr] << endl;
     emit_addiu(SP, SP, 4, s);
-    curSpFpSize -= 4;
+    curSpFpSize -= 1;
     emit_load(ACC, 0, SP, s);
 }
 
@@ -354,24 +356,54 @@ inline void emit_method_call(Symbol className, Symbol methodName, ostream &s) {
     emit_method_ref(className, methodName, s);
     s << endl;
 }
-inline void emit_init_call(Symbol className, Symbol methodName, ostream &s) {
+inline void emit_init_call(Symbol className, ostream &s) {
     s << JAL;
     emit_init_ref(className, s);
     s << endl;
 }
+inline void emit_untracked_pop(ostream &s, int word = 1) {
+    if (word >= 1)
+        emit_addiu(SP, SP, WORD_SIZE * word, s);
+}
+// tracked pop
 inline void emit_pop(ostream &s) {
-    emit_addiu(SP, SP, 4, s);
-    curSpFpSize -= 4;
+    emit_untracked_pop(s);
+    curSpFpSize -= 1;
 }
 inline void emit_pop(char *reg, ostream &s) {
     emit_pop(s);
     emit_load(reg, 0, SP, s);
 }
+inline void pseudo_pop() { curSpFpSize -= 1; }
 
-inline void emit_new(Symbol className, ostream &s) {
-    emit_load_protobj(Int, s);
+inline void emit_static_new(Symbol className, ostream &s) {
+    emit_load_protobj(className, s);
     emit_method_call(Object, copy, s);
-    emit_init_call(Int, idtable.add_string("init"), s);
+    emit_init_call(className, s);
+}
+
+//! emit_dynamic_new: may modify T1 
+inline void emit_dynamic_new(int classTag, ostream &s) {
+    emit_load_address(T1, "class_objTab", s);
+    emit_load(ACC, classTag * 2, T1, s);
+    emit_method_call(Object, copy, s);
+    emit_load_address(T1, "class_objTab", s);
+    emit_load(T1, classTag * 2 + 1, T1, s);
+    emit_jalr(T1, s);
+}
+//! emit_dynamic_new: may modify T1 
+inline void emit_dynamic_new(char *reg, ostream &s) {
+    emit_sll(reg, reg, 3, s);
+    emit_load_address(T1, "class_objTab", s);
+    emit_add(T1, reg, T1, s);
+    StackUsage stack(s);
+    stack.push(T1);
+
+    emit_load(ACC, 0, T1, s);   // _protObj
+    emit_method_call(Object, copy, s);
+    emit_load(T1, 1, SP, s);
+    emit_load(T1, 1, T1, s);    // _init
+    emit_jalr(T1, s);
 }
 
 inline void emit_load_prim1(char *reg, ostream &s) {
@@ -620,8 +652,9 @@ void CgenClassTable::code_constants() {
     //
     // Add constants that are required by the code generator.
     //
-    stringtable.add_string("");
-    inttable.add_string("0");
+    stringDefault = stringtable.add_string("");
+    intDefault = inttable.add_string("0");
+
 
     stringtable.code_string_table(str, stringclasstag);
     inttable.code_string_table(str, intclasstag);
@@ -630,23 +663,39 @@ void CgenClassTable::code_constants() {
 
 void CgenClassTable::code_class_nameTab() {
     str << CLASSNAMETAB << LABEL;
+    stack<StringEntry*> classNames;
     for (auto l = nds; l; l = l->tl()) {
         auto nameEntry =
             stringtable.lookup_string(l->hd()->get_name()->get_string());
+        classNames.push(nameEntry);
+    }
+
+    while(!classNames.empty()) {
+        auto nameEntry = classNames.top();
         str << WORD;
         nameEntry->code_ref(str);
         str << endl;
+        classNames.pop();
     }
 }
 void CgenClassTable::code_class_objTab() {
     str << CLASSOBJTAB << LABEL;
+    stack<StringEntry*> classNames;
     for (auto l = nds; l; l = l->tl()) {
+        auto nameEntry =
+            stringtable.lookup_string(l->hd()->get_name()->get_string());
+        classNames.push(nameEntry);
+    }
+
+    while(!classNames.empty()) {
+        auto nameEntry = classNames.top();
         str << WORD;
-        emit_protobj_ref(l->hd()->get_name(), str);
+        emit_protobj_ref(nameEntry, str);
         str << endl;
         str << WORD;
-        emit_init_ref(l->hd()->get_name(), str);
+        emit_init_ref(nameEntry, str);
         str << endl;
+        classNames.pop();
     }
 }
 void CgenClassTable::code_dispTab() {
@@ -657,17 +706,40 @@ void CgenClassTable::code_dispTab() {
         code_class_dispTab(classNode);
     }
 }
-void CgenClassTable::code_class_dispTab(CgenNode *classNode) {
+map<Symbol, pair<Symbol, size_t>> CgenClassTable::get_class_dispTab(CgenNode *classNode) {
+    map<Symbol, pair<Symbol, size_t>> methodTable;
     if (classNode->get_parentnd()) {
-        code_class_dispTab(classNode->get_parentnd());
+        methodTable = std::move(get_class_dispTab(classNode->get_parentnd()));
     }
     auto features = classNode->get_features();
     for (int i = features->first(); features->more(i); i = features->next(i)) {
         if (auto methodNode = dynamic_cast<method_class *>(features->nth(i))) {
-            str << WORD;
-            emit_method_ref(classNode->get_name(), methodNode->get_name(), str);
-            str << endl;
+            auto methodName = methodNode->get_name();
+            auto className = classNode->get_name();
+            if(methodTable.find(methodName) == methodTable.end()) {
+                methodTable[methodName] = {className, methodTable.size()};
+            } else {
+                int index = methodTable[methodName].second;
+                methodTable[methodName] = {className, index};
+            }
         }
+    }
+    return methodTable;
+}
+void CgenClassTable::code_class_dispTab(CgenNode *classNode) {
+    auto methodTable = get_class_dispTab(classNode);
+    vector<tuple<Symbol, Symbol, size_t>> sortedTable;
+    sortedTable.reserve(methodTable.size());
+    transform(methodTable.begin(), methodTable.end(), back_inserter(sortedTable), [](auto &mapedType){
+        return tuple<Symbol, Symbol, size_t>{mapedType.first, mapedType.second.first, mapedType.second.second};
+    });
+    sort(sortedTable.begin(), sortedTable.end(), [](auto &lhs, auto &rhs){
+        return get<2>(lhs) < get<2>(rhs);
+    });
+    for(auto &method : sortedTable) {
+        str << WORD;
+        emit_method_ref(get<1>(method), get<0>(method), str);
+        str << endl;
     }
 }
 
@@ -679,41 +751,44 @@ void CgenClassTable::code_protObjs() {
         emit_protobj_ref(classNode->get_name(), str);
         str << LABEL                                      // label
             << WORD << classNode->get_classTag() << endl; // tag
-        int attr_count = 0;
-        auto features = classNode->get_features();
-        for (int i = features->first(); features->more(i);
-             i = features->next(i)) {
-            if (dynamic_cast<attr_class *>(features->nth(i))) {
-                ++attr_count;
-            }
-        }
+        int attr_count = classNode->get_attr_count();
         str << WORD << (DEFAULT_OBJFIELDS + attr_count) << endl // size
             << WORD;
         emit_disptable_ref(classNode->get_name(), str);
         str << endl; // dispatch table
-        for (int i = features->first(); features->more(i);
-             i = features->next(i)) {
-            if (auto attrNode = dynamic_cast<attr_class *>(features->nth(i))) {
-                if (attrNode->get_type_decl() == Int) {
-                    str << WORD;
-                    intDefault->code_ref(str);
-                    str << endl;
-                } else if (attrNode->get_type_decl() == Bool) {
-                    str << WORD;
-                    falsebool.code_ref(str);
-                    str << endl;
-                } else if (attrNode->get_type_decl() == Int) {
-                    str << WORD;
-                    stringDefault->code_ref(str);
-                    str << endl;
-                } else {
-                    str << WORD;
-                    otherDefault->code_ref(str);
-                    str << endl;
-                }
+
+        code_attributes(classNode);
+    }
+}
+
+void CgenClassTable::code_attributes(CgenNodeP classNode) {
+    if(classNode->get_parentnd()) {
+        code_attributes(classNode->get_parentnd());
+    }
+    auto features = classNode->get_features();
+    for (int i = features->first(); features->more(i);
+            i = features->next(i)) {
+        if (auto attrNode = dynamic_cast<attr_class *>(features->nth(i))) {
+            if (attrNode->get_type_decl() == Int) {
+                str << WORD;
+                intDefault->code_ref(str);
+                str << endl;
+            } else if (attrNode->get_type_decl() == Bool) {
+                str << WORD;
+                falsebool.code_ref(str);
+                str << endl;
+            } else if (attrNode->get_type_decl() == Str) {
+                str << WORD;
+                stringDefault->code_ref(str);
+                str << endl;
+            } else {
+                str << WORD;
+                str << 0;
+                str << endl;
             }
         }
     }
+        
 }
 
 void CgenClassTable::code_initializer() {
@@ -726,6 +801,12 @@ void CgenClassTable::code_initializer() {
 }
 
 void CgenClassTable::code_class_initializer(CgenNode *classNode) {
+    NameScope classScope(this);
+    bindObjectName(self, SELF);
+    auto features = classNode->get_features();
+    int attrOffset = 0;
+    bindClassAttrs(classNode, attrOffset);
+
     code_method_head(3);
     StackSizeTracker sizeTracker(curSpFpSize);
 
@@ -733,19 +814,25 @@ void CgenClassTable::code_class_initializer(CgenNode *classNode) {
     emit_move(SELF, ACC, str);
     if (classNode->get_name() != Object)
         str << JAL << classNode->get_parent() << CLASSINIT_SUFFIX << endl;
-    auto features = classNode->get_features();
+
+    // todo delete me
+    if(classNode->get_name() == idtable.add_string("Foo"))
+        int breakpoint;
     int fieldOffset = DEFAULT_OBJFIELDS;
+    if(classNode->get_parentnd()) {
+        fieldOffset += classNode->get_parentnd()->get_attr_count();
+    }
     for (int i = features->first(); features->more(i); i = features->next(i)) {
         if (auto attrNode = dynamic_cast<attr_class *>(features->nth(i))) {
             auto initNode = attrNode->get_init();
-            if (initNode != no_expr()) {
+            if (initNode->get_type()) {
                 initNode->code(str, context);
                 emit_store(ACC, fieldOffset, SELF, str);
             } else {
                 // inited by prototype object
             }
+            fieldOffset += 1;
         }
-        fieldOffset += 1;
     }
 
     emit_move(ACC, SELF, str);
@@ -764,12 +851,7 @@ void CgenClassTable::code_class_methods(CgenNode *classNode) {
     auto features = classNode->get_features();
 
     int attrOffset = 0;
-    for (int i = features->first(); features->more(i); i = features->next(i)) {
-        if (auto attrNode = dynamic_cast<attr_class *>(features->nth(i))) {
-            bindObjectName(attrNode->get_name(), SELF,
-                           DEFAULT_OBJFIELDS + attrOffset++);
-        }
-    }
+    bindClassAttrs(classNode, attrOffset);
 
     for (int i = features->first(); features->more(i); i = features->next(i)) {
         if (auto methodNode = dynamic_cast<method_class *>(features->nth(i))) {
@@ -784,36 +866,38 @@ void CgenClassTable::code_method(CgenNode *classNode,
     str << LABEL;
     code_method_head(3);
 
-/**
+    /**
 
---------
-param n
--------- 
-fp
--------- <- last sp
-s0
---------
-ra
--------- <- new fp
+    --------
+    param n
+    --------
+    fp
+    -------- <- last sp
+    s0
+    --------
+    ra
+    -------- <- new fp
 
--------- <- new sp
+    -------- <- new sp
 
- */
+     */
 
     NameScope methodScope(this);
     auto formals = methodNode->formals;
     int formalOffset = 0;
     int formalLen = formals->len();
-    for(int i = formals->first(); formals->more(i); i = formals->next(i)) {
+    int formalPos = formalLen + 2;
+    for (int i = formals->first(); formals->more(i); i = formals->next(i)) {
         auto formal = formals->nth(i);
-        bindObjectName(dynamic_cast<formal_class*>(formal)->name, FP, 2+formalLen);
+        bindObjectName(dynamic_cast<formal_class *>(formal)->name, FP,
+                       formalPos--);
     }
 
     StackSizeTracker sizeTracker(curSpFpSize);
     emit_move(SELF, ACC, str);
     ExpressionContext context = {this, classNode};
     methodNode->get_expr()->code(str, context);
-    code_method_tail(3, 0);
+    code_method_tail(3, formalLen);
 }
 
 void CgenClassTable::code_method_head(int frameSizeWord) {
@@ -826,13 +910,13 @@ void CgenClassTable::code_method_head(int frameSizeWord) {
     emit_addiu(FP, SP, 4, str);
 }
 void CgenClassTable::code_method_tail(int frameSizeWord,
-                                      int localStackSizeWord) {
-    int frameSizeByte = frameSizeWord * WORD_SIZE,
-        localStackSizeByte = localStackSizeWord * 4;
+                                      int extraParam) {
+    int frameSizeByte = frameSizeWord * WORD_SIZE;
     // load registers
     emit_pop(RA, str);
     emit_pop(SELF, str);
     emit_pop(FP, str);
+    emit_untracked_pop(str, extraParam);
     emit_return(str);
 }
 
@@ -842,6 +926,18 @@ void CgenClassTable::bindObjectName(Symbol name, char *reg, int offset) {
 void CgenClassTable::bindObjectName(Symbol name, char *reg) {
     names.addid(name, new RegisterName(reg));
 }
+void CgenClassTable::bindClassAttrs(CgenNodeP classNode, int &attrOffset) {
+    if(classNode->get_parentnd()) {
+        bindClassAttrs(classNode->get_parentnd(), attrOffset);
+    }
+    auto features = classNode->get_features();
+    for (int i = features->first(); features->more(i); i = features->next(i)) {
+        if (auto attrNode = dynamic_cast<attr_class *>(features->nth(i))) {
+            bindObjectName(attrNode->get_name(), SELF,
+                           DEFAULT_OBJFIELDS + attrOffset++);
+        }
+    }
+}
 void CgenClassTable::getNameAddress(Symbol name, char *reg, ostream &s) {
     if (auto symbol = names.lookup(name)) {
         symbol->getAddress(reg, s);
@@ -850,6 +946,23 @@ void CgenClassTable::getNameAddress(Symbol name, char *reg, ostream &s) {
         assert(false);
     }
 }
+void CgenClassTable::setNameAddress(Symbol name, char *reg, ostream &s) {
+    if (auto symbol = names.lookup(name)) {
+        symbol->setAddress(reg, s);
+    } else {
+        cerr << "no name " << name << endl;
+        assert(false);
+    }
+}
+CgenNodeP CgenClassTable::getClassNode(Symbol className) {
+    for (List<CgenNode> *l = nds; l; l = l->tl()) {
+        if(l->hd()->get_name() == className) {
+            return l->hd();
+        }
+    }
+    return nullptr;
+}
+
 
 CgenClassTable::CgenClassTable(Classes classes, ostream &s)
     : nds(NULL), str(s) {
@@ -1106,7 +1219,7 @@ CgenNode::CgenNode(Class_ nd, Basicness bstatus, CgenClassTableP ct,
 
 void assign_class::code(ostream &s, ExpressionContext &context) {
     expr->code(s, context);
-    context.classTable->getNameAddress(name, ACC, s);
+    context.classTable->setNameAddress(name, ACC, s);
 }
 
 void static_dispatch_class::code(ostream &s, ExpressionContext &context) {
@@ -1115,10 +1228,13 @@ void static_dispatch_class::code(ostream &s, ExpressionContext &context) {
     for (int i = actual->first(); actual->more(i); i = actual->next(i)) {
         auto actualNode = actual->nth(i);
         actualNode->code(s, context);
-        stack.push(ACC);
+        stack.singlePush(ACC);
     }
     expr->code(s, context);
-    emit_method_call(type_name, name, s);
+    auto staticClass = context.classTable->getClassNode(type_name);
+    auto methodClass = staticClass->get_override_method_class(name);
+    emit_method_call(methodClass, name, s);
+    curSpFpSize -= actual->len();
 }
 
 void dispatch_class::code(ostream &s, ExpressionContext &context) {
@@ -1127,22 +1243,33 @@ void dispatch_class::code(ostream &s, ExpressionContext &context) {
     for (int i = actual->first(); actual->more(i); i = actual->next(i)) {
         auto actualNode = actual->nth(i);
         actualNode->code(s, context);
-        stack.push(ACC);
+        stack.singlePush(ACC);
     }
     expr->code(s, context);
+    int notVoidLabel = curLabel++;
+    emit_bne(ACC, ZERO, notVoidLabel, s);
+
+    // dispatch on void
+    auto fileName = stringtable.add_string(context.classNode->get_filename()->get_string());
+    emit_load_imm(T1, expr->get_line_number(), s);  // line number
+    emit_load_string(ACC, fileName, s);
+    emit_jalr("_dispatch_abort", s);
+
+    emit_label_def(notVoidLabel, s);
     emit_load(T1, DISPTABLE_OFFSET, ACC, s);
 
     auto exprType = expr->get_type();
-    if(exprType == SELF_TYPE) {
+    if (exprType == SELF_TYPE) {
         exprType = context.classNode->get_name();
     }
     int methodIndex =
         context.classTable->lookup(exprType)->find_method_index(name);
-    if(context.classNode->get_name() == Main) {
+    if (context.classNode->get_name() == Main) {
         int breakpoint = 0;
     }
     emit_load(T1, methodIndex, T1, s);
     emit_jalr(T1, s);
+    curSpFpSize -= actual->len();
 }
 
 void cond_class::code(ostream &s, ExpressionContext &context) {
@@ -1179,9 +1306,14 @@ void typcase_class::code(ostream &s, ExpressionContext &context) {
     auto symbolTable = context.classTable->get_names();
     StackUsage stack(s);
     expr->code(s, context);
-    emit_load(T1, TAG_OFFSET, ACC, s);
     int endLabel = curLabel++;
-    int errorLabel = curLabel++;
+    int noMatchCaseLabel = curLabel++;
+    int caseVoidLabel = curLabel++;
+    stack.push(ACC);
+
+    emit_beqz(ACC, caseVoidLabel, s);
+
+    emit_load(T1, TAG_OFFSET, ACC, s);
 
     for (int i = cases->first(); cases->more(i); i = cases->next(i)) {
         int nextLabel = curLabel++;
@@ -1193,7 +1325,6 @@ void typcase_class::code(ostream &s, ExpressionContext &context) {
 
         NameScope branchScope(context.classTable);
         // hit
-        stack.push(ACC);
         context.classTable->bindObjectName(branch->name, FP, -curSpFpSize);
         branch->expr->code(s, context);
         emit_branch(endLabel, s);
@@ -1202,9 +1333,17 @@ void typcase_class::code(ostream &s, ExpressionContext &context) {
         emit_label_def(nextLabel, s);
     }
 
-    emit_label_def(errorLabel, s);
-    // run-time error
+    auto fileName = stringtable.add_string(context.classNode->get_filename()->get_string());
+
+    // if no matched case
+    emit_label_def(noMatchCaseLabel, s);
     emit_jal("_case_abort", s);
+    emit_branch(endLabel, s);
+    // if case expr is void
+    emit_label_def(caseVoidLabel, s);
+    emit_load_imm(T1, expr->get_line_number(), s);  // line number
+    emit_load_string(ACC, fileName, s);
+    emit_jal("_case_abort2", s);
 
     emit_label_def(endLabel, s);
 }
@@ -1219,7 +1358,17 @@ void block_class::code(ostream &s, ExpressionContext &context) {
 void let_class::code(ostream &s, ExpressionContext &context) {
     auto symbolTable = context.classTable->get_names();
     StackUsage stack(s);
-    init->code(s, context);
+    if(!init->get_type() && (type_decl == Int || type_decl == Bool || type_decl == Str)) {
+        if(type_decl == Int) {
+            emit_load_int(ACC, intDefault, s);
+        } else if(type_decl == Bool) {
+            emit_load_bool(ACC, falsebool, s);
+        } else {
+            emit_load_string(ACC, stringDefault, s);
+        }
+    } else {
+        init->code(s, context);
+    }
     NameScope letScope(context.classTable);
     stack.push(ACC);
     context.classTable->bindObjectName(identifier, FP, -curSpFpSize);
@@ -1237,7 +1386,7 @@ void plus_class::code(ostream &s, ExpressionContext &context) {
     emit_load(T1, 1, SP, s);
     emit_add(ACC, T1, ACC, s);
     stack.push(ACC);
-    emit_new(Int, s);
+    emit_static_new(Int, s);
     emit_load(T1, 1, SP, s);
     emit_store(T1, DEFAULT_OBJFIELDS, ACC, s);
 }
@@ -1253,7 +1402,7 @@ void sub_class::code(ostream &s, ExpressionContext &context) {
     emit_load(T1, 1, SP, s);
     emit_sub(ACC, T1, ACC, s);
     stack.push(ACC);
-    emit_new(Int, s);
+    emit_static_new(Int, s);
     emit_load(T1, 1, SP, s);
     emit_store(T1, DEFAULT_OBJFIELDS, ACC, s);
 }
@@ -1269,7 +1418,7 @@ void mul_class::code(ostream &s, ExpressionContext &context) {
     emit_load(T1, 1, SP, s);
     emit_mul(ACC, T1, ACC, s);
     stack.push(ACC);
-    emit_new(Int, s);
+    emit_static_new(Int, s);
     emit_load(T1, 1, SP, s);
     emit_store(T1, DEFAULT_OBJFIELDS, ACC, s);
 }
@@ -1285,7 +1434,7 @@ void divide_class::code(ostream &s, ExpressionContext &context) {
     emit_load(T1, 1, SP, s);
     emit_div(ACC, T1, ACC, s);
     stack.push(ACC);
-    emit_new(Int, s);
+    emit_static_new(Int, s);
     emit_load(T1, 1, SP, s);
     emit_store(T1, DEFAULT_OBJFIELDS, ACC, s);
 }
@@ -1309,31 +1458,82 @@ void lt_class::code(ostream &s, ExpressionContext &context) {
     e2->code(s, context);
     emit_load_prim1(ACC, s);
     emit_load(T1, 1, SP, s);
-    emit_load_imm(T2, 0, s);
+    emit_load_bool(T2, truebool, s);
     int ltlabel = curLabel++;
     emit_blt(T1, ACC, ltlabel, s);
-    emit_load_imm(T2, 1, s);
+    emit_load_bool(T2, falsebool, s);
     emit_label_def(ltlabel, s);
-    emit_new(Bool, s);
-    emit_store(T2, DEFAULT_OBJFIELDS, ACC, s);
+    emit_move(ACC, T2, s);
 }
 
 void eq_class::code(ostream &s, ExpressionContext &context) {
     auto symbolTable = context.classTable->get_names();
-    StackUsage stack(s);
-    e1->code(s, context);
-    emit_load_prim1(ACC, s);
-    stack.push(ACC);
-    e2->code(s, context);
-    emit_load_prim1(ACC, s);
-    emit_load(T1, 1, SP, s);
-    emit_load_imm(T2, 1, s);
-    int eqlabel = curLabel++;
-    emit_beq(ACC, T1, eqlabel, s);
-    emit_load_imm(T2, 0, s);
-    emit_label_def(eqlabel, s);
-    emit_new(Bool, s);
-    emit_store(T2, DEFAULT_OBJFIELDS, ACC, s);
+    if(e1->get_type() == Int || e1->get_type() == Bool) {
+        StackUsage stack(s);
+        e1->code(s, context);
+        emit_load_prim1(ACC, s);
+        stack.push(ACC);
+        e2->code(s, context);
+        emit_load_prim1(ACC, s);
+        emit_load(T1, 1, SP, s);
+        emit_load_bool(T2, truebool, s);
+        int endlabel = curLabel++;
+        emit_beq(ACC, T1, endlabel, s);
+        emit_load_bool(T2, falsebool, s);
+        emit_label_def(endlabel, s);
+        emit_move(ACC, T2, s);
+    } else if(e1->get_type() == Str) {
+        StackUsage stack(s);
+        e1->code(s, context);
+        stack.push(ACC);
+        e2->code(s, context);
+        emit_load(T1, 1, SP, s);
+        emit_load_bool(T2, falsebool, s);
+
+        int loopCompLabel = curLabel++;
+        int trueLabel = curLabel++;
+        int endlabel = curLabel++;
+
+        emit_load(T4, DEFAULT_OBJFIELDS, ACC, s);
+        emit_load(T5, DEFAULT_OBJFIELDS, T1, s);
+        emit_load(T4, DEFAULT_OBJFIELDS, T4, s);
+        emit_load(T5, DEFAULT_OBJFIELDS, T5, s);
+        emit_bne(T4, T5, endlabel, s);
+
+        emit_load(T3, SIZE_OFFSET, ACC, s);
+        emit_addiu(T3, T3, -DEFAULT_OBJFIELDS-1, s);
+        
+        emit_addiu(ACC, ACC, (DEFAULT_OBJFIELDS+1) * WORD_SIZE, s);
+        emit_addiu(T1, T1, (DEFAULT_OBJFIELDS+1) * WORD_SIZE, s);
+
+        // loop:
+        emit_label_def(loopCompLabel, s);
+        emit_load(T4, 0, ACC, s);
+        emit_load(T5, 0, T1, s);
+        emit_bne(T4, T5, endlabel, s);
+
+        emit_addiu(ACC, ACC, 4, s);
+        emit_addiu(T1, T1, 4, s);
+        emit_addiu(T3, T3, -1, s);
+        emit_bne(T3, ZERO, loopCompLabel, s);
+
+        emit_label_def(trueLabel, s);
+        emit_load_bool(T2, truebool, s);
+        emit_label_def(endlabel, s);
+        emit_move(ACC, T2, s);
+    } else {
+        StackUsage stack(s);
+        e1->code(s, context);
+        stack.push(ACC);
+        e2->code(s, context);
+        emit_load(T1, 1, SP, s);
+        emit_load_bool(T2, truebool, s);
+        int endlabel = curLabel++;
+        emit_beq(ACC, T1, endlabel, s);
+        emit_load_bool(T2, falsebool, s);
+        emit_label_def(endlabel, s);
+        emit_move(ACC, T2, s);
+    }
 }
 
 void leq_class::code(ostream &s, ExpressionContext &context) {
@@ -1347,9 +1547,10 @@ void leq_class::code(ostream &s, ExpressionContext &context) {
     emit_load(T1, 1, SP, s);
     emit_load_bool(T2, truebool, s);
     int leqlabel = curLabel++;
-    emit_bleq(ACC, T1, leqlabel, s);
+    emit_bleq(T1, ACC, leqlabel, s);
     emit_load_bool(T2, falsebool, s);
     emit_label_def(leqlabel, s);
+    emit_move(ACC, T2, s);
 }
 
 void comp_class::code(ostream &s, ExpressionContext &context) {
@@ -1379,14 +1580,23 @@ void bool_const_class::code(ostream &s, ExpressionContext &context) {
 }
 
 void new__class::code(ostream &s, ExpressionContext &context) {
-    auto symbolTable = context.classTable->get_names();
-    emit_load_protobj(type_name, s);
-    emit_method_call(Object, ::copy, s);
+    if(type_name == SELF_TYPE) {
+        emit_load(T2, TAG_OFFSET, SELF, s);
+        emit_dynamic_new(T2, s);
+    } else {
+        emit_static_new(type_name, s);
+    }
 }
 
 void isvoid_class::code(ostream &s, ExpressionContext &context) {
     auto symbolTable = context.classTable->get_names();
     e1->code(s, context);
+    emit_move(T1, ACC, s);
+    emit_load_bool(ACC, truebool, s);
+    int endLabel = curLabel++;
+    emit_beqz(T1, endLabel, s);
+    emit_load_bool(ACC, falsebool, s);
+    emit_label_def(endLabel, s);
 }
 
 void no_expr_class::code(ostream &s, ExpressionContext &context) {
@@ -1399,17 +1609,26 @@ void object_class::code(ostream &s, ExpressionContext &context) {
 }
 
 StackUsage::~StackUsage() {
-    emit_addiu(SP, SP, allocatedWord * WORD_SIZE, s);
-    curSpFpSize -= allocatedWord * WORD_SIZE;
+    if(allocatedWord > 0)
+        emit_addiu(SP, SP, allocatedWord * WORD_SIZE, s);
+    curSpFpSize -= allocatedWord;
 }
 void StackUsage::push(char *reg) {
     emit_push(reg, s);
     ++allocatedWord;
 }
+void StackUsage::singlePush(char *reg) { emit_push(reg, s); }
 
 void RegisterName::getAddress(char *destreg, ostream &s) {
     emit_move(destreg, reg, s);
 }
+void RegisterName::setAddress(char *sourcereg, ostream &s) {
+    emit_move(reg, sourcereg, s);
+}
+
 void MemoryName::getAddress(char *destreg, ostream &s) {
     emit_load(destreg, offset, reg, s);
+}
+void MemoryName::setAddress(char *sourcereg, ostream &s) {
+    emit_store(sourcereg, offset, reg, s);
 }
