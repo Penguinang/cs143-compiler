@@ -2,6 +2,7 @@
 using std::sort;
 using std::swap;
 using std::transform;
+using std::for_each;
 #include <map>
 using std::get;
 using std::map;
@@ -28,8 +29,8 @@ typedef CgenClassTable *CgenClassTableP;
 class CgenNode;
 typedef CgenNode *CgenNodeP;
 
-class NameNode;
-using NameNodeP = NameNode *;
+class Reference;
+using ReferenceP = Reference *;
 
 class CgenClassTable : public SymbolTable<Symbol, CgenNode> {
   private:
@@ -44,7 +45,7 @@ class CgenClassTable : public SymbolTable<Symbol, CgenNode> {
     // 2. attribute      self + offset
     // 3. let            sp + offset
     // 4. case           sp + offset
-    SymbolTable<Symbol, NameNode> names;
+    SymbolTable<Symbol, Reference> names;
     friend class NameScope;
 
     // The following methods emit code for
@@ -59,20 +60,17 @@ class CgenClassTable : public SymbolTable<Symbol, CgenNode> {
     void code_class_nameTab();
     void code_class_objTab();
     void code_dispTab();
-    /**
-     * @return: pair of <methodName, <className, index>>
-     */
-    map<Symbol, pair<Symbol, size_t>> get_class_dispTab(CgenNode *classNode);
     void code_class_dispTab(CgenNode *classNode);
     void code_protObjs();
     void code_attributes(CgenNodeP classNode);
-    void code_initializer();
-    void code_class_initializer(CgenNode *classNode);
     void code_methods();
     void code_class_methods(CgenNode *classNode);
-    void code_method(CgenNode *classNode, method_class *methodNode);
-    void code_method_head(int frameSizeWord);
-    void code_method_tail(int frameSizeWord, int localStackSizeWord);
+    void code_class_method(CgenNode *classNode, method_class *methodNode);
+    void code_initializers();
+    void code_class_initializer(CgenNode *classNode);
+
+    void code_method_head();
+    void code_method_tail(int localStackSizeWord = 0);
 
     // The following creates an inheritance graph from
     // a list of classes.  The graph is implemented as
@@ -93,24 +91,46 @@ class CgenClassTable : public SymbolTable<Symbol, CgenNode> {
 
     auto &get_names() { return names; }
 
-    void bindObjectName(Symbol name, char *reg, int offset);
-    void bindObjectName(Symbol name, char *reg);
-    void bindClassAttrs(CgenNodeP classNode, int &attrOffset);
-    void unbindObjectName(Symbol name);
-    void getNameAddress(Symbol name, char *reg, ostream &s);
-    void setNameAddress(Symbol name, char *reg, ostream &s);
-    CgenNodeP getClassNode(Symbol className);
+    /**
+     * @param name 标识符
+     * @param reg @param offset 标识符对应的引用的位置，可能是一个寄存器或内存位置
+     */
+    void bindReferenceName(Symbol name, char *reg, int offset);
+    void bindReferenceName(Symbol name, char *reg);
+    /**
+     * @param startOffset 第一个attribute 开始的地方
+     * @return 下一个attribute 开始的地方
+     */
+    int bindClassAttrNames(CgenNodeP classNode, int startOffset);
+    /**
+     * @param name 标识符
+     * @param reg 寄存器名称
+     * @brief 加载标识符所引用对象的地址到reg中
+     */
+    void loadReference(Symbol name, char *reg, ostream &s);
+    /**
+     * @brief 将引用重新绑定到reg所指的地址上
+     */
+    void referenceRebind(Symbol name, char *reg, ostream &s);
 
     bool isAncestor(Symbol child, Symbol ancestor);
+
+    // classes traversal helper
+    template<typename VISTOR>
+    void preorderTraverse(VISTOR const &visitor) {
+        return preorderTraverse(root(), visitor);
+    }
+    template<typename VISTOR>
+    void preorderTraverse(CgenNodeP start, VISTOR const &visitor);
+    template<typename VISTOR>
+    void listLinearOrder(VISTOR const &visitor) {
+        for (auto l = nds; l; l = l->tl()) {
+            visitor(l->hd());
+        }
+    }
 };
 
 int constexpr NO_CLASS_TAG = -1;
-int constexpr OBJECT_CLASS_TAG = 0;
-int constexpr IO_CLASS_TAG = 1;
-int constexpr INT_CLASS_TAG = 2;
-int constexpr BOOL_CLASS_TAG = 3;
-int constexpr STRING_CLASS_TAG = 4;
-int constexpr USER_CLASS_TAG_OFFSET = 5;
 int constexpr CLASS_TAG_PLACEHOLDER = -1;
 
 class CgenNode : public class__class {
@@ -138,39 +158,22 @@ class CgenNode : public class__class {
 
     int find_method_index(Symbol name);
     int get_attr_count() {
-        int attr_count = 0;
-        if (get_parentnd()) {
-            attr_count = get_parentnd()->get_attr_count();
-        }
-        auto features = get_features();
-        for (int i = features->first(); features->more(i);
-             i = features->next(i)) {
-            if (dynamic_cast<attr_class *>(features->nth(i))) {
-                ++attr_count;
-            }
-        }
-        return attr_count;
+        int count = 0;
+        for_each_attr([&](attr_class*){
+            ++count;
+        });
+        if(parentnd)
+            count += parentnd->get_attr_count();
+        return count;
     }
 
     /**
-     * @return: className of class which finally override method `methodName`
+     * @return className of class which finally override method `methodName`
      */
     Symbol get_override_method_class(Symbol methodName) {
-        auto features = get_features();
-        for (int i = features->first(); features->more(i);
-             i = features->next(i)) {
-            if (auto methodNode =
-                    dynamic_cast<method_class *>(features->nth(i))) {
-                if (methodNode->get_name() == methodName) {
-                    return get_name();
-                }
-            }
-        }
-
-        if (get_parentnd())
-            return get_parentnd()->get_override_method_class(methodName);
-        else
-            return nullptr;
+        auto mTable = getMethodTable();
+        auto methodIt = mTable.find(methodName);
+        return methodIt == mTable.end() ? nullptr : methodIt->second.first;
     }
 
     bool isAncestor(Symbol type) {
@@ -181,6 +184,9 @@ class CgenNode : public class__class {
         }
     }
 
+    /**
+     * @brief 返回子类个数
+     */
     int offspringCount() {
         int ret = 0;
         for(auto l = children; l; l = l->tl()) {
@@ -196,6 +202,26 @@ class CgenNode : public class__class {
     void set_classTag(int &classTag) {
         this->classTag = classTag;
     }
+
+    template<typename VISITOR>
+    void for_each_attr(VISITOR const &visitor) {
+        for (int i = features->first(); features->more(i);
+                i = features->next(i)) {
+            if (auto attrNode = dynamic_cast<attr_class *>(features->nth(i))) {
+                visitor(attrNode);
+            }
+        }
+    }
+
+    template<typename VISITOR>
+    void for_each_method(VISITOR const &visitor) {
+        for (int i = features->first(); features->more(i);
+                i = features->next(i)) {
+            if (auto attrNode = dynamic_cast<method_class *>(features->nth(i))) {
+                visitor(attrNode);
+            }
+        }
+    }    
 };
 
 class BoolConst {
@@ -208,43 +234,60 @@ class BoolConst {
     void code_ref(ostream &) const;
 };
 
-class NameNode {
+/**
+ * @brief 引用对象
+ * 
+ * 引用的右值是另一个对象的地址
+ */
+class Reference {
   public:
+    /**
+     * @brief 加载引用的右值到reg中，即是加载所引用对象的地址
+     */
     virtual void getAddress(char *reg, ostream &s) = 0;
+    /**
+     * @brief 设置引用的右值为reg中的值，相当于将引用绑定到新的对象
+     */
     virtual void setAddress(char *reg, ostream &s) = 0;
 };
 // address stored in register
-class RegisterName : public NameNode {
+class RegisterReference : public Reference {
     char *reg;
 
   public:
-    RegisterName(char *reg) : reg(reg) {}
+    RegisterReference(char *reg) : reg(reg) {}
     virtual void getAddress(char *reg, ostream &s);
     virtual void setAddress(char *reg, ostream &s);
 };
 // address stored in memory
-class MemoryName : public NameNode {
+class MemoryReference : public Reference {
     char *reg;
     int offset;
 
   public:
-    MemoryName(char const *reg, int offset)
+    MemoryReference(char const *reg, int offset)
         : reg(const_cast<char *>(reg)), offset(offset) {}
     virtual void getAddress(char *reg, ostream &s);
     virtual void setAddress(char *reg, ostream &s);
 };
 
+/**
+ * @brief 运行时栈的抽象，帮助自动退栈，以及维护栈长度信息
+ */
 class StackUsage {
     ostream &s;
     int allocatedWord = 0;
-    int pseudoPopWord = 0;
 
   public:
     StackUsage(ostream &s) : s(s) {}
     ~StackUsage();
-    // pop on destroy
+    /**
+     * @brief 每个push的字最终会在栈析构时弹出
+     */
     void push(char *reg);
-    // not pop on destroy, for function parameters poped by callee
+    /**
+     * @brief 析构时不会有对应的弹栈
+     */
     void singlePush(char *reg);
 };
 
@@ -266,4 +309,38 @@ class NameScope {
         classTable->names.enterscope();
     }
     ~NameScope() { classTable->names.exitscope(); }
+};
+
+template<typename VISTOR>
+void CgenClassTable::preorderTraverse(CgenNodeP start, VISTOR const &visitor) {
+    stack<CgenNodeP> toTraverse;
+    toTraverse.push(start);
+    while(!toTraverse.empty()) {
+        auto cur = toTraverse.top();
+        toTraverse.pop();
+        visitor(cur);
+        for(auto l = cur->get_children(); l; l = l->tl()) {
+            toTraverse.push(l->hd());
+        }
+    }
+}
+
+template<typename Elem, typename VISTOR>
+inline void for_each(list_node<Elem> *listHead, VISTOR const &visitor) {
+    for (int i = listHead->first(); listHead->more(i); i = listHead->next(i)) {
+        visitor(listHead->nth(i));
+    }    
+}
+
+// TODO register 包装
+/**
+ * @example 
+ * Register s1 = "$s1";
+ * s1 = 1; // move s1 1
+ * *s1 = 1; // load s1 1
+ * Register s2 = "$s2";
+ * s2 = s1; // move s2 s1
+ */
+class Register{
+  public:
 };

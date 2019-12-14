@@ -96,7 +96,10 @@ BoolConst truebool(TRUE);
 IntEntryP intDefault;
 StringEntryP stringDefault;
 
-int curLabel = 1;
+inline int newLabel() {
+    static int curLabel = 1;
+    return curLabel++;
+}
 
 //*********************************************************
 //
@@ -410,6 +413,15 @@ inline void emit_dynamic_new(char *reg, ostream &s) {
 inline void emit_load_prim1(char *reg, ostream &s) {
     emit_load(reg, DEFAULT_OBJFIELDS, reg, s);
 }
+template<typename PRINTABLE>
+inline void emit_word(PRINTABLE const &content, ostream &s) {
+    s << WORD << content << endl;
+}
+inline void emit_eyecatcher(ostream &s) {
+    emit_word("-1", s);
+}
+
+
 ///////////////////////////////////////////////////////////////////////////////
 //
 // coding strings, ints, and booleans
@@ -664,71 +676,27 @@ void CgenClassTable::code_constants() {
 
 void CgenClassTable::code_class_nameTab() {
     str << CLASSNAMETAB << LABEL;
-    auto objectNode = lookup(Object);
-    stack<CgenNodeP> traverseStack;
-    traverseStack.push(objectNode);
-    while(!traverseStack.empty()) {
-        auto classNode = traverseStack.top();
-        traverseStack.pop();
+    preorderTraverse([&](CgenNodeP classNode){
         str << WORD;
-        auto nameEntry = stringtable.lookup_string(classNode->name->get_string());
+        auto nameEntry = stringtable.lookup_string(classNode->get_name()->get_string());
         nameEntry->code_ref(str);
         str << endl;
-        for(auto children = classNode->get_children(); children; children = children->tl()) {
-            traverseStack.push(children->hd());
-        }
-    }
+    });
 }
 void CgenClassTable::code_class_objTab() {
     str << CLASSOBJTAB << LABEL;
-
-    auto objectNode = lookup(Object);
-    stack<CgenNodeP> traverseStack;
-    traverseStack.push(objectNode);
-    while(!traverseStack.empty()) {
-        auto classNode = traverseStack.top();
-        traverseStack.pop();
-
-        auto nameEntry = stringtable.lookup_string(classNode->name->get_string());
-        str << WORD;
-        emit_protobj_ref(nameEntry, str);
-        str << endl;
-        str << WORD;
-        emit_init_ref(nameEntry, str);
-        str << endl;
-
-        for(auto children = classNode->get_children(); children; children = children->tl()) {
-            traverseStack.push(children->hd());
-        }
-    }
+    preorderTraverse([&](CgenNodeP classNode) {
+        str << WORD; emit_protobj_ref(classNode->name, str); str << endl;
+        str << WORD; emit_init_ref(classNode->name, str); str << endl;
+    });
 }
 void CgenClassTable::code_dispTab() {
-    for (auto l = nds; l; l = l->tl()) {
-        auto classNode = l->hd();
-        emit_disptable_ref(classNode->get_name(), str);
-        str << LABEL;
-        code_class_dispTab(classNode);
-    }
-}
-map<Symbol, pair<Symbol, size_t>> CgenClassTable::get_class_dispTab(CgenNode *classNode) {
-    map<Symbol, pair<Symbol, size_t>> methodTable;
-    if (classNode->get_parentnd()) {
-        methodTable = std::move(get_class_dispTab(classNode->get_parentnd()));
-    }
-    auto features = classNode->get_features();
-    for (int i = features->first(); features->more(i); i = features->next(i)) {
-        if (auto methodNode = dynamic_cast<method_class *>(features->nth(i))) {
-            auto methodName = methodNode->get_name();
-            auto className = classNode->get_name();
-            if(methodTable.find(methodName) == methodTable.end()) {
-                methodTable[methodName] = {className, methodTable.size()};
-            } else {
-                int index = methodTable[methodName].second;
-                methodTable[methodName] = {className, index};
-            }
-        }
-    }
-    return methodTable;
+    preorderTraverse([&, this](CgenNodeP classNode) {
+        // x_disptab:
+        emit_disptable_ref(classNode->name, str); str << LABEL;
+        // content
+        this->code_class_dispTab(classNode);
+    });
 }
 void CgenClassTable::code_class_dispTab(CgenNode *classNode) {
     auto &methodTable = classNode->getMethodTable();
@@ -748,164 +716,131 @@ void CgenClassTable::code_class_dispTab(CgenNode *classNode) {
 }
 
 void CgenClassTable::code_protObjs() {
-    for (auto l = nds; l; l = l->tl()) {
-        auto classNode = l->hd();
-
-        str << WORD << "-1" << endl;
-        emit_protobj_ref(classNode->get_name(), str);
-        str << LABEL                                      // label
-            << WORD << classNode->get_classTag() << endl; // tag
+    listLinearOrder([&](CgenNodeP classNode) {
+        // .word -1
+        emit_eyecatcher(str);
+        // x_protObj:
+        emit_protobj_ref(classNode->get_name(), str); str << LABEL;
+        // classtag
+        emit_word(classNode->get_classTag(), str);
+        // size
         int attr_count = classNode->get_attr_count();
-        str << WORD << (DEFAULT_OBJFIELDS + attr_count) << endl // size
-            << WORD;
-        emit_disptable_ref(classNode->get_name(), str);
-        str << endl; // dispatch table
+        emit_word(DEFAULT_OBJFIELDS + attr_count, str);
+        // dispatch table
+        str << WORD; emit_disptable_ref(classNode->get_name(), str); str << endl;
 
         code_attributes(classNode);
-    }
+    });
 }
 
 void CgenClassTable::code_attributes(CgenNodeP classNode) {
     if(classNode->get_parentnd()) {
         code_attributes(classNode->get_parentnd());
     }
-    auto features = classNode->get_features();
-    for (int i = features->first(); features->more(i);
-            i = features->next(i)) {
-        if (auto attrNode = dynamic_cast<attr_class *>(features->nth(i))) {
-            if (attrNode->get_type_decl() == Int) {
-                str << WORD;
-                intDefault->code_ref(str);
-                str << endl;
-            } else if (attrNode->get_type_decl() == Bool) {
-                str << WORD;
-                falsebool.code_ref(str);
-                str << endl;
-            } else if (attrNode->get_type_decl() == Str) {
-                str << WORD;
-                stringDefault->code_ref(str);
-                str << endl;
-            } else {
-                str << WORD;
-                str << 0;
-                str << endl;
-            }
+    classNode->for_each_attr([&](attr_class *attrNode){
+        if (attrNode->get_type_decl() == Int) {
+            str << WORD; intDefault->code_ref(str); str << endl;
+        } else if (attrNode->get_type_decl() == Bool) {
+            str << WORD; falsebool.code_ref(str); str << endl;
+        } else if (attrNode->get_type_decl() == Str) {
+            str << WORD; stringDefault->code_ref(str); str << endl;
+        } else {
+            str << WORD; str << 0; str << endl;
         }
-    }
-        
+    });
 }
 
-void CgenClassTable::code_initializer() {
-    for (auto l = nds; l; l = l->tl()) {
-        auto classNode = l->hd();
-        emit_init_ref(classNode->get_name(), str);
-        str << LABEL;
+void CgenClassTable::code_initializers() {
+    listLinearOrder([&](auto classNode){
+        // x_init:
+        emit_init_ref(classNode->get_name(), str); str << LABEL;
+        // code content
         code_class_initializer(classNode);
-    }
+    });
 }
 
 void CgenClassTable::code_class_initializer(CgenNode *classNode) {
     NameScope classScope(this);
-    bindObjectName(self, SELF);
-    auto features = classNode->get_features();
-    int attrOffset = 0;
-    bindClassAttrs(classNode, attrOffset);
+    bindReferenceName(self, SELF);
+    bindClassAttrNames(classNode, DEFAULT_OBJFIELDS);
 
-    code_method_head(3);
+    code_method_head();
     StackSizeTracker sizeTracker(curSpFpSize);
 
     ExpressionContext context = {this, classNode};
     emit_move(SELF, ACC, str);
     if (classNode->get_name() != Object)
-        str << JAL << classNode->get_parent() << CLASSINIT_SUFFIX << endl;
+        emit_init_call(classNode->get_parent(), str);
 
-    // todo delete me
-    if(classNode->get_name() == idtable.add_string("Foo"))
-        int breakpoint;
-    int fieldOffset = DEFAULT_OBJFIELDS;
-    if(classNode->get_parentnd()) {
-        fieldOffset += classNode->get_parentnd()->get_attr_count();
-    }
-    for (int i = features->first(); features->more(i); i = features->next(i)) {
-        if (auto attrNode = dynamic_cast<attr_class *>(features->nth(i))) {
-            auto initNode = attrNode->get_init();
-            if (initNode->get_type()) {
-                initNode->code(str, context);
-                emit_store(ACC, fieldOffset, SELF, str);
-            } else {
-                // inited by prototype object
-            }
-            fieldOffset += 1;
-        }
-    }
-
+    classNode->for_each_attr([&](attr_class *attrNode){
+        auto initNode = attrNode->get_init();
+        if (initNode->get_type()) {
+            initNode->code(str, context);
+            referenceRebind(attrNode->name, ACC, str);
+        } 
+        /* else {
+            inited by prototype object
+        } */
+    });
     emit_move(ACC, SELF, str);
-    code_method_tail(3, 0);
+    code_method_tail();
 }
 void CgenClassTable::code_methods() {
-    for (auto l = nds; l; l = l->tl()) {
-        auto classNode = l->hd();
-        if (!classNode->basic())
+    listLinearOrder([this](CgenNodeP classNode){
+        if(!classNode->basic()) {
             code_class_methods(classNode);
-    }
+        }
+    });
 }
 void CgenClassTable::code_class_methods(CgenNode *classNode) {
     NameScope classScope(this);
-    bindObjectName(self, SELF);
+    bindReferenceName(self, SELF);
     auto features = classNode->get_features();
+    bindClassAttrNames(classNode, DEFAULT_OBJFIELDS);
 
-    int attrOffset = 0;
-    bindClassAttrs(classNode, attrOffset);
-
-    for (int i = features->first(); features->more(i); i = features->next(i)) {
-        if (auto methodNode = dynamic_cast<method_class *>(features->nth(i))) {
-            code_method(classNode, methodNode);
-        }
-    }
+    classNode->for_each_method([this, classNode](method_class *methodNode){
+        code_class_method(classNode, methodNode);
+    });
 }
 
-void CgenClassTable::code_method(CgenNode *classNode,
+void CgenClassTable::code_class_method(CgenNode *classNode,
                                  method_class *methodNode) {
     emit_method_ref(classNode->get_name(), methodNode->get_name(), str);
     str << LABEL;
-    code_method_head(3);
+    code_method_head();
 
-    /**
-
+    /* stack activation record
     --------
     param n
     --------
     fp
-    -------- <- last sp
+    -------- <- caller sp
     s0
     --------
     ra
-    -------- <- new fp
+    -------- <- callee fp
 
-    -------- <- new sp
-
+    -------- <- callee sp
      */
 
     NameScope methodScope(this);
     auto formals = methodNode->formals;
-    int formalOffset = 0;
     int formalLen = formals->len();
     int formalPos = formalLen + 2;
-    for (int i = formals->first(); formals->more(i); i = formals->next(i)) {
-        auto formal = formals->nth(i);
-        bindObjectName(dynamic_cast<formal_class *>(formal)->name, FP,
+    for_each(formals, [&, this](Formal formal){
+        bindReferenceName(dynamic_cast<formal_class *>(formal)->name, FP,
                        formalPos--);
-    }
+    });
 
     StackSizeTracker sizeTracker(curSpFpSize);
     emit_move(SELF, ACC, str);
     ExpressionContext context = {this, classNode};
     methodNode->get_expr()->code(str, context);
-    code_method_tail(3, formalLen);
+    code_method_tail(formalLen);
 }
 
-void CgenClassTable::code_method_head(int frameSizeWord) {
-    int frameSizeByte = frameSizeWord * WORD_SIZE;
+void CgenClassTable::code_method_head() {
+    constexpr int frameSizeByte = 3 * WORD_SIZE;
     // save registers
     emit_push(FP, str);
     emit_push(SELF, str);
@@ -913,36 +848,34 @@ void CgenClassTable::code_method_head(int frameSizeWord) {
     // update frame pointer
     emit_addiu(FP, SP, 4, str);
 }
-void CgenClassTable::code_method_tail(int frameSizeWord,
-                                      int extraParam) {
-    int frameSizeByte = frameSizeWord * WORD_SIZE;
+void CgenClassTable::code_method_tail(int extraParam) {
+    constexpr int frameSizeByte = 3 * WORD_SIZE;
     // load registers
     emit_pop(RA, str);
     emit_pop(SELF, str);
     emit_pop(FP, str);
+    // 参数退栈上半部，不减小fpSize，延迟到caller中
     emit_untracked_pop(str, extraParam);
     emit_return(str);
 }
 
-void CgenClassTable::bindObjectName(Symbol name, char *reg, int offset) {
-    names.addid(name, new MemoryName(reg, offset));
+void CgenClassTable::bindReferenceName(Symbol name, char *reg, int offset) {
+    names.addid(name, new MemoryReference(reg, offset));
 }
-void CgenClassTable::bindObjectName(Symbol name, char *reg) {
-    names.addid(name, new RegisterName(reg));
+void CgenClassTable::bindReferenceName(Symbol name, char *reg) {
+    names.addid(name, new RegisterReference(reg));
 }
-void CgenClassTable::bindClassAttrs(CgenNodeP classNode, int &attrOffset) {
+int CgenClassTable::bindClassAttrNames(CgenNodeP classNode, int startOffset) {
+    int nextOffset = startOffset;
     if(classNode->get_parentnd()) {
-        bindClassAttrs(classNode->get_parentnd(), attrOffset);
+        nextOffset = bindClassAttrNames(classNode->get_parentnd(), nextOffset);
     }
-    auto features = classNode->get_features();
-    for (int i = features->first(); features->more(i); i = features->next(i)) {
-        if (auto attrNode = dynamic_cast<attr_class *>(features->nth(i))) {
-            bindObjectName(attrNode->get_name(), SELF,
-                           DEFAULT_OBJFIELDS + attrOffset++);
-        }
-    }
+    classNode->for_each_attr([&, this](attr_class *attrNode){
+        bindReferenceName(attrNode->get_name(), SELF, nextOffset++);
+    });
+    return nextOffset;
 }
-void CgenClassTable::getNameAddress(Symbol name, char *reg, ostream &s) {
+void CgenClassTable::loadReference(Symbol name, char *reg, ostream &s) {
     if (auto symbol = names.lookup(name)) {
         symbol->getAddress(reg, s);
     } else {
@@ -950,7 +883,7 @@ void CgenClassTable::getNameAddress(Symbol name, char *reg, ostream &s) {
         assert(false);
     }
 }
-void CgenClassTable::setNameAddress(Symbol name, char *reg, ostream &s) {
+void CgenClassTable::referenceRebind(Symbol name, char *reg, ostream &s) {
     if (auto symbol = names.lookup(name)) {
         symbol->setAddress(reg, s);
     } else {
@@ -958,17 +891,8 @@ void CgenClassTable::setNameAddress(Symbol name, char *reg, ostream &s) {
         assert(false);
     }
 }
-CgenNodeP CgenClassTable::getClassNode(Symbol className) {
-    for (List<CgenNode> *l = nds; l; l = l->tl()) {
-        if(l->hd()->get_name() == className) {
-            return l->hd();
-        }
-    }
-    return nullptr;
-}
 bool CgenClassTable::isAncestor(Symbol child, Symbol ancestor) {
-    auto childType = lookup(child);
-    return childType->isAncestor(ancestor);
+    return probe(child)->isAncestor(ancestor);
 }
 
 
@@ -1128,7 +1052,6 @@ void CgenClassTable::install_class(CgenNodeP nd) {
     addid(name, nd);
 }
 
-// 按照先序遍历顺序生成tag
 void CgenClassTable::install_classes(Classes cs) {
     for (int i = cs->first(); cs->more(i); i = cs->next(i))
         install_class(new CgenNode(cs->nth(i), NotBasic, this, CLASS_TAG_PLACEHOLDER));
@@ -1146,13 +1069,8 @@ void CgenClassTable::build_inheritance_tree() {
 // traverse inheritance tree by pre-order
 //
 void CgenClassTable::calculateClassTag() {
-    auto objectNode = lookup(Object);
     int curClassTag = 0;
-    stack<CgenNodeP> traverseStack;
-    traverseStack.push(objectNode);
-    while(!traverseStack.empty()) {
-        auto classNode = traverseStack.top();
-        traverseStack.pop();
+    preorderTraverse([&](CgenNodeP classNode){
         classNode->set_classTag(curClassTag);
         if(classNode->name == Int) {
             intclasstag = curClassTag;
@@ -1162,10 +1080,7 @@ void CgenClassTable::calculateClassTag() {
             stringclasstag = curClassTag;
         }
         ++curClassTag;
-        for(auto children = classNode->get_children(); children; children = children->tl()) {
-            traverseStack.push(children->hd());
-        }
-    }
+    });
 }
 
 //
@@ -1223,7 +1138,7 @@ void CgenClassTable::code() {
     //                   - the class methods
     //                   - etc...
 
-    code_initializer();
+    code_initializers();
     code_methods();
 }
 
@@ -1245,16 +1160,14 @@ void CgenNode::recalculateMethodTable() {
     if (get_parentnd()) {
         methodTable = get_parentnd()->getMethodTable();
     }
-    for (int i = features->first(); features->more(i); i = features->next(i)) {
-        if (auto methodNode = dynamic_cast<method_class *>(features->nth(i))) {
-            auto methodName = methodNode->get_name();
-            if(methodTable.find(methodName) == methodTable.end()) {
-                methodTable[methodName] = {this->name, methodTable.size()};
-            } else {
-                methodTable[methodName].first = this->name;
-            }
-        }
-    }
+    for_each_method([&](method_class *methodNode){
+        auto methodName = methodNode->get_name();
+        if(methodTable.find(methodName) == methodTable.end()) {
+            methodTable[methodName] = {this->name, methodTable.size()};
+        } else {
+            methodTable[methodName].first = this->name;
+        }        
+    });
 }
 
 map<Symbol, pair<Symbol, size_t>> const& CgenNode::getMethodTable() {
@@ -1291,11 +1204,10 @@ CgenNode::CgenNode(Class_ nd, Basicness bstatus, CgenClassTableP ct,
 
 void assign_class::code(ostream &s, ExpressionContext &context) {
     expr->code(s, context);
-    context.classTable->setNameAddress(name, ACC, s);
+    context.classTable->referenceRebind(name, ACC, s);
 }
 
 void static_dispatch_class::code(ostream &s, ExpressionContext &context) {
-    auto symbolTable = context.classTable->get_names();
     StackUsage stack(s);
     for (int i = actual->first(); actual->more(i); i = actual->next(i)) {
         auto actualNode = actual->nth(i);
@@ -1303,14 +1215,14 @@ void static_dispatch_class::code(ostream &s, ExpressionContext &context) {
         stack.singlePush(ACC);
     }
     expr->code(s, context);
-    auto staticClass = context.classTable->getClassNode(type_name);
+    auto staticClass = context.classTable->lookup(type_name);
     auto methodClass = staticClass->get_override_method_class(name);
     emit_method_call(methodClass, name, s);
+    // 函数参数退栈下半部
     curSpFpSize -= actual->len();
 }
 
 void dispatch_class::code(ostream &s, ExpressionContext &context) {
-    auto symbolTable = context.classTable->get_names();
     StackUsage stack(s);
     for (int i = actual->first(); actual->more(i); i = actual->next(i)) {
         auto actualNode = actual->nth(i);
@@ -1318,7 +1230,7 @@ void dispatch_class::code(ostream &s, ExpressionContext &context) {
         stack.singlePush(ACC);
     }
     expr->code(s, context);
-    int notVoidLabel = curLabel++;
+    int notVoidLabel = newLabel();
     emit_bne(ACC, ZERO, notVoidLabel, s);
 
     // dispatch on void
@@ -1334,21 +1246,18 @@ void dispatch_class::code(ostream &s, ExpressionContext &context) {
     if (exprType == SELF_TYPE) {
         exprType = context.classNode->get_name();
     }
-    if(name == idtable.add_string("apply")) {
-        int breakpoint = 1;
-    }
     int methodIndex =
         context.classTable->lookup(exprType)->find_method_index(name);
     emit_load(T1, methodIndex, T1, s);
     emit_jalr(T1, s);
+    // 函数参数退栈下半部
     curSpFpSize -= actual->len();
 }
 
 void cond_class::code(ostream &s, ExpressionContext &context) {
-    auto symbolTable = context.classTable->get_names();
     pred->code(s, context);
-    int falseLabel = curLabel++;
-    int endLabel = curLabel++;
+    int falseLabel = newLabel();
+    int endLabel = newLabel();
     emit_load(ACC, DEFAULT_OBJFIELDS, ACC, s);
     emit_beqz(ACC, falseLabel, s);
     then_exp->code(s, context);
@@ -1359,9 +1268,8 @@ void cond_class::code(ostream &s, ExpressionContext &context) {
 }
 
 void loop_class::code(ostream &s, ExpressionContext &context) {
-    auto symbolTable = context.classTable->get_names();
-    int endLabel = curLabel++;
-    int startLabel = curLabel++;
+    int endLabel = newLabel();
+    int startLabel = newLabel();
     // loop
     emit_label_def(startLabel, s);
     pred->code(s, context);
@@ -1374,63 +1282,49 @@ void loop_class::code(ostream &s, ExpressionContext &context) {
     emit_move(ACC, ZERO, s);
 }
 
-//! TODO: 父类型匹配子类型对象
 void typcase_class::code(ostream &s, ExpressionContext &context) {
-    auto symbolTable = context.classTable->get_names();
     StackUsage stack(s);
     expr->code(s, context);
-    int endLabel = curLabel++;
-    int noMatchCaseLabel = curLabel++;
-    int caseVoidLabel = curLabel++;
+    int endLabel = newLabel();
+    int noMatchCaseLabel = newLabel();
+    int caseVoidLabel = newLabel();
     stack.push(ACC);
 
     emit_beqz(ACC, caseVoidLabel, s);
-
-    auto inheritanceOrder = [&](branch_class* child, branch_class* ancestor) {
-        return context.classTable->isAncestor(child->type_decl, ancestor->type_decl);
-    };
-
-    vector<vector<branch_class*>> inheritanceLinks;
-    for (int i = cases->first(); cases->more(i); i = cases->next(i)) {
-        auto branchNode = dynamic_cast<branch_class*>(cases->nth(i));
-        auto typeLabel = branchNode->type_decl;
-        bool matched = false;
-        for(auto &link : inheritanceLinks) {
-            if(context.classTable->isAncestor(typeLabel, link.front()->type_decl) 
-                || context.classTable->isAncestor(link.front()->type_decl, typeLabel)) {
-                link.push_back(branchNode);
-                matched = true;
-                break;
-            }
-        }
-        if(!matched) {
-            inheritanceLinks.push_back({branchNode});
-        }
-    }
-
-    for(auto &link : inheritanceLinks) {
-        sort(link.begin(), link.end(), inheritanceOrder);
-    }
-
     emit_load(T1, TAG_OFFSET, ACC, s);
 
-    for(auto &link : inheritanceLinks) {
-        for(auto branchNode : link) {
-            int nextLabel = curLabel++;
-            auto typeNode = context.classTable->lookup(branchNode->type_decl);
-            int tagLowBound = typeNode->get_classTag(), tagUpBound = typeNode->offspringCount() + typeNode->get_classTag();
-            emit_blti(T1, tagLowBound, nextLabel, s);
-            emit_bgti(T1, tagUpBound, nextLabel, s);
-
-            NameScope branchScope(context.classTable);
-            // hit
-            context.classTable->bindObjectName(branchNode->name, FP, -curSpFpSize);
-            branchNode->expr->code(s, context);
-            emit_branch(endLabel, s);
-
-            // fallback
-            emit_label_def(nextLabel, s);
+    // 对继承树进行拓扑排序，靠前面的先进比较
+    auto inheritanceOrder = [&](branch_class* child, branch_class* ancestor) {
+        if(context.classTable->isAncestor(child->type_decl, ancestor->type_decl)) {
+            return true;
+        } else if(context.classTable->isAncestor(ancestor->type_decl, child->type_decl)) {
+            return false;
+        } else {
+            return child < ancestor;
         }
+    };
+    vector<branch_class*> inheritanceLinks;
+    for (int i = cases->first(); cases->more(i); i = cases->next(i)) {
+        auto branchNode = dynamic_cast<branch_class*>(cases->nth(i));
+        inheritanceLinks.push_back(branchNode);
+    }
+    sort(inheritanceLinks.begin(), inheritanceLinks.end(), inheritanceOrder);
+
+    for(auto branchNode : inheritanceLinks) {
+        int nextLabel = newLabel();
+        auto classNode = context.classTable->probe(branchNode->type_decl);
+        int tagLowBound = classNode->get_classTag(), tagUpBound = classNode->offspringCount() + classNode->get_classTag();
+        emit_blti(T1, tagLowBound, nextLabel, s);
+        emit_bgti(T1, tagUpBound, nextLabel, s);
+
+        NameScope branchScope(context.classTable);
+        // hit
+        context.classTable->bindReferenceName(branchNode->name, FP, -curSpFpSize);
+        branchNode->expr->code(s, context);
+        emit_branch(endLabel, s);
+
+        // fallback
+        emit_label_def(nextLabel, s);
     }
 
     auto fileName = stringtable.add_string(context.classNode->get_filename()->get_string());
@@ -1449,14 +1343,12 @@ void typcase_class::code(ostream &s, ExpressionContext &context) {
 }
 
 void block_class::code(ostream &s, ExpressionContext &context) {
-    auto symbolTable = context.classTable->get_names();
     for (int i = body->first(); body->more(i); i = body->next(i)) {
         body->nth(i)->code(s, context);
     }
 }
 
 void let_class::code(ostream &s, ExpressionContext &context) {
-    auto symbolTable = context.classTable->get_names();
     StackUsage stack(s);
     if(!init->get_type() && (type_decl == Int || type_decl == Bool || type_decl == Str)) {
         if(type_decl == Int) {
@@ -1471,76 +1363,63 @@ void let_class::code(ostream &s, ExpressionContext &context) {
     }
     NameScope letScope(context.classTable);
     stack.push(ACC);
-    context.classTable->bindObjectName(identifier, FP, -curSpFpSize);
+    context.classTable->bindReferenceName(identifier, FP, -curSpFpSize);
     body->code(s, context);
 }
 
 void plus_class::code(ostream &s, ExpressionContext &context) {
-    auto symbolTable = context.classTable->get_names();
     StackUsage stack(s);
     e1->code(s, context);
     emit_load_prim1(ACC, s);
     stack.push(ACC);
     e2->code(s, context);
-    emit_load_prim1(ACC, s);
+    emit_method_call(Object, ::copy, s);
     emit_load(T1, 1, SP, s);
-    emit_add(ACC, T1, ACC, s);
-    stack.push(ACC);
-    emit_static_new(Int, s);
-    emit_load(T1, 1, SP, s);
+    emit_load(T2, DEFAULT_OBJFIELDS, ACC, s);
+    emit_add(T1, T1, T2, s);
     emit_store(T1, DEFAULT_OBJFIELDS, ACC, s);
 }
 
 void sub_class::code(ostream &s, ExpressionContext &context) {
-    auto symbolTable = context.classTable->get_names();
     StackUsage stack(s);
     e1->code(s, context);
     emit_load_prim1(ACC, s);
     stack.push(ACC);
     e2->code(s, context);
-    emit_load_prim1(ACC, s);
+    emit_method_call(Object, ::copy, s);
     emit_load(T1, 1, SP, s);
-    emit_sub(ACC, T1, ACC, s);
-    stack.push(ACC);
-    emit_static_new(Int, s);
-    emit_load(T1, 1, SP, s);
+    emit_load(T2, DEFAULT_OBJFIELDS, ACC, s);
+    emit_sub(T1, T1, T2, s);
     emit_store(T1, DEFAULT_OBJFIELDS, ACC, s);
 }
 
 void mul_class::code(ostream &s, ExpressionContext &context) {
-    auto symbolTable = context.classTable->get_names();
     StackUsage stack(s);
     e1->code(s, context);
     emit_load_prim1(ACC, s);
     stack.push(ACC);
     e2->code(s, context);
-    emit_load_prim1(ACC, s);
+    emit_method_call(Object, ::copy, s);
     emit_load(T1, 1, SP, s);
-    emit_mul(ACC, T1, ACC, s);
-    stack.push(ACC);
-    emit_static_new(Int, s);
-    emit_load(T1, 1, SP, s);
+    emit_load(T2, DEFAULT_OBJFIELDS, ACC, s);
+    emit_mul(T1, T1, T2, s);
     emit_store(T1, DEFAULT_OBJFIELDS, ACC, s);
 }
 
 void divide_class::code(ostream &s, ExpressionContext &context) {
-    auto symbolTable = context.classTable->get_names();
     StackUsage stack(s);
     e1->code(s, context);
     emit_load_prim1(ACC, s);
     stack.push(ACC);
     e2->code(s, context);
-    emit_load_prim1(ACC, s);
+    emit_method_call(Object, ::copy, s);
     emit_load(T1, 1, SP, s);
-    emit_div(ACC, T1, ACC, s);
-    stack.push(ACC);
-    emit_static_new(Int, s);
-    emit_load(T1, 1, SP, s);
+    emit_load(T2, DEFAULT_OBJFIELDS, ACC, s);
+    emit_div(T1, T1, T2, s);
     emit_store(T1, DEFAULT_OBJFIELDS, ACC, s);
 }
 
 void neg_class::code(ostream &s, ExpressionContext &context) {
-    auto symbolTable = context.classTable->get_names();
     StackUsage stack(s);
     e1->code(s, context);
     emit_method_call(Object, ::copy, s);
@@ -1550,7 +1429,6 @@ void neg_class::code(ostream &s, ExpressionContext &context) {
 }
 
 void lt_class::code(ostream &s, ExpressionContext &context) {
-    auto symbolTable = context.classTable->get_names();
     StackUsage stack(s);
     e1->code(s, context);
     emit_load_prim1(ACC, s);
@@ -1559,7 +1437,7 @@ void lt_class::code(ostream &s, ExpressionContext &context) {
     emit_load_prim1(ACC, s);
     emit_load(T1, 1, SP, s);
     emit_load_bool(T2, truebool, s);
-    int ltlabel = curLabel++;
+    int ltlabel = newLabel();
     emit_blt(T1, ACC, ltlabel, s);
     emit_load_bool(T2, falsebool, s);
     emit_label_def(ltlabel, s);
@@ -1567,7 +1445,6 @@ void lt_class::code(ostream &s, ExpressionContext &context) {
 }
 
 void eq_class::code(ostream &s, ExpressionContext &context) {
-    auto symbolTable = context.classTable->get_names();
     if(e1->get_type() == Int || e1->get_type() == Bool) {
         StackUsage stack(s);
         e1->code(s, context);
@@ -1577,7 +1454,7 @@ void eq_class::code(ostream &s, ExpressionContext &context) {
         emit_load_prim1(ACC, s);
         emit_load(T1, 1, SP, s);
         emit_load_bool(T2, truebool, s);
-        int endlabel = curLabel++;
+        int endlabel = newLabel();
         emit_beq(ACC, T1, endlabel, s);
         emit_load_bool(T2, falsebool, s);
         emit_label_def(endlabel, s);
@@ -1590,9 +1467,9 @@ void eq_class::code(ostream &s, ExpressionContext &context) {
         emit_load(T1, 1, SP, s);
         emit_load_bool(T2, falsebool, s);
 
-        int loopCompLabel = curLabel++;
-        int trueLabel = curLabel++;
-        int endlabel = curLabel++;
+        int loopCompLabel = newLabel();
+        int trueLabel = newLabel();
+        int endlabel = newLabel();
 
         emit_load(T4, DEFAULT_OBJFIELDS, ACC, s);
         emit_load(T5, DEFAULT_OBJFIELDS, T1, s);
@@ -1628,7 +1505,7 @@ void eq_class::code(ostream &s, ExpressionContext &context) {
         e2->code(s, context);
         emit_load(T1, 1, SP, s);
         emit_load_bool(T2, truebool, s);
-        int endlabel = curLabel++;
+        int endlabel = newLabel();
         emit_beq(ACC, T1, endlabel, s);
         emit_load_bool(T2, falsebool, s);
         emit_label_def(endlabel, s);
@@ -1637,7 +1514,6 @@ void eq_class::code(ostream &s, ExpressionContext &context) {
 }
 
 void leq_class::code(ostream &s, ExpressionContext &context) {
-    auto symbolTable = context.classTable->get_names();
     StackUsage stack(s);
     e1->code(s, context);
     emit_load_prim1(ACC, s);
@@ -1646,7 +1522,7 @@ void leq_class::code(ostream &s, ExpressionContext &context) {
     emit_load_prim1(ACC, s);
     emit_load(T1, 1, SP, s);
     emit_load_bool(T2, truebool, s);
-    int leqlabel = curLabel++;
+    int leqlabel = newLabel();
     emit_bleq(T1, ACC, leqlabel, s);
     emit_load_bool(T2, falsebool, s);
     emit_label_def(leqlabel, s);
@@ -1654,7 +1530,6 @@ void leq_class::code(ostream &s, ExpressionContext &context) {
 }
 
 void comp_class::code(ostream &s, ExpressionContext &context) {
-    auto symbolTable = context.classTable->get_names();
     StackUsage stack(s);
     e1->code(s, context);
     emit_method_call(Object, ::copy, s);
@@ -1689,23 +1564,21 @@ void new__class::code(ostream &s, ExpressionContext &context) {
 }
 
 void isvoid_class::code(ostream &s, ExpressionContext &context) {
-    auto symbolTable = context.classTable->get_names();
     e1->code(s, context);
     emit_move(T1, ACC, s);
     emit_load_bool(ACC, truebool, s);
-    int endLabel = curLabel++;
+    int endLabel = newLabel();
     emit_beqz(T1, endLabel, s);
     emit_load_bool(ACC, falsebool, s);
     emit_label_def(endLabel, s);
 }
 
 void no_expr_class::code(ostream &s, ExpressionContext &context) {
-    auto symbolTable = context.classTable->get_names();
     emit_move(ACC, ZERO, s);
 }
 
 void object_class::code(ostream &s, ExpressionContext &context) {
-    context.classTable->getNameAddress(name, ACC, s);
+    context.classTable->loadReference(name, ACC, s);
 }
 
 StackUsage::~StackUsage() {
@@ -1719,16 +1592,16 @@ void StackUsage::push(char *reg) {
 }
 void StackUsage::singlePush(char *reg) { emit_push(reg, s); }
 
-void RegisterName::getAddress(char *destreg, ostream &s) {
+void RegisterReference::getAddress(char *destreg, ostream &s) {
     emit_move(destreg, reg, s);
 }
-void RegisterName::setAddress(char *sourcereg, ostream &s) {
+void RegisterReference::setAddress(char *sourcereg, ostream &s) {
     emit_move(reg, sourcereg, s);
 }
 
-void MemoryName::getAddress(char *destreg, ostream &s) {
+void MemoryReference::getAddress(char *destreg, ostream &s) {
     emit_load(destreg, offset, reg, s);
 }
-void MemoryName::setAddress(char *sourcereg, ostream &s) {
+void MemoryReference::setAddress(char *sourcereg, ostream &s) {
     emit_store(sourcereg, offset, reg, s);
 }
