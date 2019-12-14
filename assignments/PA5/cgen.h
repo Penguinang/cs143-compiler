@@ -84,6 +84,7 @@ class CgenClassTable : public SymbolTable<Symbol, CgenNode> {
     void install_classes(Classes cs);
     void build_inheritance_tree();
     void set_relations(CgenNodeP nd);
+    void calculateClassTag();
 
   public:
     CgenClassTable(Classes, ostream &str);
@@ -99,6 +100,8 @@ class CgenClassTable : public SymbolTable<Symbol, CgenNode> {
     void getNameAddress(Symbol name, char *reg, ostream &s);
     void setNameAddress(Symbol name, char *reg, ostream &s);
     CgenNodeP getClassNode(Symbol className);
+
+    bool isAncestor(Symbol child, Symbol ancestor);
 };
 
 int constexpr NO_CLASS_TAG = -1;
@@ -108,6 +111,7 @@ int constexpr INT_CLASS_TAG = 2;
 int constexpr BOOL_CLASS_TAG = 3;
 int constexpr STRING_CLASS_TAG = 4;
 int constexpr USER_CLASS_TAG_OFFSET = 5;
+int constexpr CLASS_TAG_PLACEHOLDER = -1;
 
 class CgenNode : public class__class {
   private:
@@ -117,27 +121,10 @@ class CgenNode : public class__class {
                               // `NotBasic' otherwise
     int classTag;
 
-    bool internal_find_method_index(Symbol name, int &start) {
-        if (get_parentnd()) {
-            if (get_parentnd()->internal_find_method_index(name, start)) {
-                return true;
-            }
-        }
+    map<Symbol, pair<Symbol, size_t>> methodTable;
+    bool parentDirtyBit = true;
 
-        for (int i = features->first(); features->more(i);
-             i = features->next(i)) {
-            if (auto methodNode =
-                    dynamic_cast<method_class *>(features->nth(i))) {
-                if (methodNode->get_name() == name) {
-                    return true;
-                } else {
-                    ++start;
-                }
-            }
-        }
-
-        return false;
-    }
+    void recalculateMethodTable();
 
   public:
     CgenNode(Class_ c, Basicness bstatus, CgenClassTableP class_table,
@@ -149,15 +136,7 @@ class CgenNode : public class__class {
     CgenNodeP get_parentnd() { return parentnd; }
     int basic() { return (basic_status == Basic); }
 
-    int find_method_index(Symbol name) {
-        int start = 0;
-        if (!internal_find_method_index(name, start)) {
-            cerr << "no method " << name;
-            assert(false);
-        }
-        return start;
-    }
-
+    int find_method_index(Symbol name);
     int get_attr_count() {
         int attr_count = 0;
         if (get_parentnd()) {
@@ -194,7 +173,29 @@ class CgenNode : public class__class {
             return nullptr;
     }
 
+    bool isAncestor(Symbol type) {
+        if(parentnd) {
+            return this->parent == type || parentnd->isAncestor(type);
+        } else {
+            return false;
+        }
+    }
+
+    int offspringCount() {
+        int ret = 0;
+        for(auto l = children; l; l = l->tl()) {
+            ++ ret;
+            ret += l->hd()->offspringCount();
+        }
+        return ret;
+    }
+
+    map<Symbol, pair<Symbol, size_t>> const& getMethodTable();
+
     GETTER(classTag)
+    void set_classTag(int &classTag) {
+        this->classTag = classTag;
+    }
 };
 
 class BoolConst {

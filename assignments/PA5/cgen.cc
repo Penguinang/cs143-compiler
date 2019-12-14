@@ -24,6 +24,7 @@
 
 #include <stack>
 using std::stack;
+#include <list>
 
 #include "cgen.h"
 #include "cgen_gc.h"
@@ -663,39 +664,42 @@ void CgenClassTable::code_constants() {
 
 void CgenClassTable::code_class_nameTab() {
     str << CLASSNAMETAB << LABEL;
-    stack<StringEntry*> classNames;
-    for (auto l = nds; l; l = l->tl()) {
-        auto nameEntry =
-            stringtable.lookup_string(l->hd()->get_name()->get_string());
-        classNames.push(nameEntry);
-    }
-
-    while(!classNames.empty()) {
-        auto nameEntry = classNames.top();
+    auto objectNode = lookup(Object);
+    stack<CgenNodeP> traverseStack;
+    traverseStack.push(objectNode);
+    while(!traverseStack.empty()) {
+        auto classNode = traverseStack.top();
+        traverseStack.pop();
         str << WORD;
+        auto nameEntry = stringtable.lookup_string(classNode->name->get_string());
         nameEntry->code_ref(str);
         str << endl;
-        classNames.pop();
+        for(auto children = classNode->get_children(); children; children = children->tl()) {
+            traverseStack.push(children->hd());
+        }
     }
 }
 void CgenClassTable::code_class_objTab() {
     str << CLASSOBJTAB << LABEL;
-    stack<StringEntry*> classNames;
-    for (auto l = nds; l; l = l->tl()) {
-        auto nameEntry =
-            stringtable.lookup_string(l->hd()->get_name()->get_string());
-        classNames.push(nameEntry);
-    }
 
-    while(!classNames.empty()) {
-        auto nameEntry = classNames.top();
+    auto objectNode = lookup(Object);
+    stack<CgenNodeP> traverseStack;
+    traverseStack.push(objectNode);
+    while(!traverseStack.empty()) {
+        auto classNode = traverseStack.top();
+        traverseStack.pop();
+
+        auto nameEntry = stringtable.lookup_string(classNode->name->get_string());
         str << WORD;
         emit_protobj_ref(nameEntry, str);
         str << endl;
         str << WORD;
         emit_init_ref(nameEntry, str);
         str << endl;
-        classNames.pop();
+
+        for(auto children = classNode->get_children(); children; children = children->tl()) {
+            traverseStack.push(children->hd());
+        }
     }
 }
 void CgenClassTable::code_dispTab() {
@@ -727,7 +731,7 @@ map<Symbol, pair<Symbol, size_t>> CgenClassTable::get_class_dispTab(CgenNode *cl
     return methodTable;
 }
 void CgenClassTable::code_class_dispTab(CgenNode *classNode) {
-    auto methodTable = get_class_dispTab(classNode);
+    auto &methodTable = classNode->getMethodTable();
     vector<tuple<Symbol, Symbol, size_t>> sortedTable;
     sortedTable.reserve(methodTable.size());
     transform(methodTable.begin(), methodTable.end(), back_inserter(sortedTable), [](auto &mapedType){
@@ -962,14 +966,18 @@ CgenNodeP CgenClassTable::getClassNode(Symbol className) {
     }
     return nullptr;
 }
+bool CgenClassTable::isAncestor(Symbol child, Symbol ancestor) {
+    auto childType = lookup(child);
+    return childType->isAncestor(ancestor);
+}
 
 
 CgenClassTable::CgenClassTable(Classes classes, ostream &s)
     : nds(NULL), str(s) {
     stringclasstag =
-        STRING_CLASS_TAG /* Change to your String class tag here */;
-    intclasstag = INT_CLASS_TAG /* Change to your Int class tag here */;
-    boolclasstag = BOOL_CLASS_TAG /* Change to your Bool class tag here */;
+        CLASS_TAG_PLACEHOLDER /* Change to your String class tag here */;
+    intclasstag = CLASS_TAG_PLACEHOLDER /* Change to your Int class tag here */;
+    boolclasstag = CLASS_TAG_PLACEHOLDER /* Change to your Bool class tag here */;
 
     enterscope();
     if (cgen_debug)
@@ -977,6 +985,7 @@ CgenClassTable::CgenClassTable(Classes classes, ostream &s)
     install_basic_classes();
     install_classes(classes);
     build_inheritance_tree();
+    calculateClassTag();
 
     code();
     exitscope();
@@ -1026,7 +1035,7 @@ void CgenClassTable::install_basic_classes() {
                    single_Features(
                        method(copy, nil_Formals(), SELF_TYPE, no_expr()))),
                filename),
-        Basic, this, OBJECT_CLASS_TAG));
+        Basic, this, CLASS_TAG_PLACEHOLDER));
 
     //
     // The IO class inherits from Object. Its methods are
@@ -1051,7 +1060,7 @@ void CgenClassTable::install_basic_classes() {
                         method(in_string, nil_Formals(), Str, no_expr()))),
                 single_Features(method(in_int, nil_Formals(), Int, no_expr()))),
             filename),
-        Basic, this, IO_CLASS_TAG));
+        Basic, this, CLASS_TAG_PLACEHOLDER));
 
     //
     // The Int class has no methods and only a single attribute, the
@@ -1060,7 +1069,7 @@ void CgenClassTable::install_basic_classes() {
     install_class(new CgenNode(
         class_(Int, Object, single_Features(attr(val, prim_slot, no_expr())),
                filename),
-        Basic, this, INT_CLASS_TAG));
+        Basic, this, CLASS_TAG_PLACEHOLDER));
 
     //
     // Bool also has only the "val" slot.
@@ -1068,7 +1077,7 @@ void CgenClassTable::install_basic_classes() {
     install_class(new CgenNode(
         class_(Bool, Object, single_Features(attr(val, prim_slot, no_expr())),
                filename),
-        Basic, this, BOOL_CLASS_TAG));
+        Basic, this, CLASS_TAG_PLACEHOLDER));
 
     //
     // The class Str has a number of slots and operations:
@@ -1098,7 +1107,7 @@ void CgenClassTable::install_basic_classes() {
                                              single_Formals(formal(arg2, Int))),
                               Str, no_expr()))),
                filename),
-        Basic, this, STRING_CLASS_TAG));
+        Basic, this, CLASS_TAG_PLACEHOLDER));
 }
 
 // CgenClassTable::install_class
@@ -1119,10 +1128,10 @@ void CgenClassTable::install_class(CgenNodeP nd) {
     addid(name, nd);
 }
 
+// 按照先序遍历顺序生成tag
 void CgenClassTable::install_classes(Classes cs) {
-    int classTag = USER_CLASS_TAG_OFFSET;
     for (int i = cs->first(); cs->more(i); i = cs->next(i))
-        install_class(new CgenNode(cs->nth(i), NotBasic, this, classTag++));
+        install_class(new CgenNode(cs->nth(i), NotBasic, this, CLASS_TAG_PLACEHOLDER));
 }
 
 //
@@ -1131,6 +1140,32 @@ void CgenClassTable::install_classes(Classes cs) {
 void CgenClassTable::build_inheritance_tree() {
     for (List<CgenNode> *l = nds; l; l = l->tl())
         set_relations(l->hd());
+}
+
+//
+// traverse inheritance tree by pre-order
+//
+void CgenClassTable::calculateClassTag() {
+    auto objectNode = lookup(Object);
+    int curClassTag = 0;
+    stack<CgenNodeP> traverseStack;
+    traverseStack.push(objectNode);
+    while(!traverseStack.empty()) {
+        auto classNode = traverseStack.top();
+        traverseStack.pop();
+        classNode->set_classTag(curClassTag);
+        if(classNode->name == Int) {
+            intclasstag = curClassTag;
+        } else if(classNode->name == Bool) {
+            boolclasstag = curClassTag;
+        } else if(classNode->name == Str) {
+            stringclasstag = curClassTag;
+        }
+        ++curClassTag;
+        for(auto children = classNode->get_children(); children; children = children->tl()) {
+            traverseStack.push(children->hd());
+        }
+    }
 }
 
 //
@@ -1153,6 +1188,7 @@ void CgenNode::set_parentnd(CgenNodeP p) {
     assert(parentnd == NULL);
     assert(p != NULL);
     parentnd = p;
+    parentDirtyBit = true;
 }
 
 void CgenClassTable::code() {
@@ -1192,6 +1228,42 @@ void CgenClassTable::code() {
 }
 
 CgenNodeP CgenClassTable::root() { return probe(Object); }
+
+int CgenNode::find_method_index(Symbol name) {
+    auto &mTable = getMethodTable();
+    auto methodIt = mTable.find(name);
+    if(methodIt == mTable.end()) {
+        cerr << "no method " << name;
+        assert(false);
+        return -1;
+    }
+    return methodIt->second.second;
+}
+
+void CgenNode::recalculateMethodTable() {
+    methodTable = {};
+    if (get_parentnd()) {
+        methodTable = get_parentnd()->getMethodTable();
+    }
+    for (int i = features->first(); features->more(i); i = features->next(i)) {
+        if (auto methodNode = dynamic_cast<method_class *>(features->nth(i))) {
+            auto methodName = methodNode->get_name();
+            if(methodTable.find(methodName) == methodTable.end()) {
+                methodTable[methodName] = {this->name, methodTable.size()};
+            } else {
+                methodTable[methodName].first = this->name;
+            }
+        }
+    }
+}
+
+map<Symbol, pair<Symbol, size_t>> const& CgenNode::getMethodTable() {
+    if(parentDirtyBit) {
+        recalculateMethodTable();
+        parentDirtyBit = false;
+    }
+    return methodTable;
+}
 
 ///////////////////////////////////////////////////////////////////////
 //
@@ -1262,11 +1334,11 @@ void dispatch_class::code(ostream &s, ExpressionContext &context) {
     if (exprType == SELF_TYPE) {
         exprType = context.classNode->get_name();
     }
+    if(name == idtable.add_string("apply")) {
+        int breakpoint = 1;
+    }
     int methodIndex =
         context.classTable->lookup(exprType)->find_method_index(name);
-    if (context.classNode->get_name() == Main) {
-        int breakpoint = 0;
-    }
     emit_load(T1, methodIndex, T1, s);
     emit_jalr(T1, s);
     curSpFpSize -= actual->len();
@@ -1302,6 +1374,7 @@ void loop_class::code(ostream &s, ExpressionContext &context) {
     emit_move(ACC, ZERO, s);
 }
 
+//! TODO: 父类型匹配子类型对象
 void typcase_class::code(ostream &s, ExpressionContext &context) {
     auto symbolTable = context.classTable->get_names();
     StackUsage stack(s);
@@ -1313,24 +1386,51 @@ void typcase_class::code(ostream &s, ExpressionContext &context) {
 
     emit_beqz(ACC, caseVoidLabel, s);
 
+    auto inheritanceOrder = [&](branch_class* child, branch_class* ancestor) {
+        return context.classTable->isAncestor(child->type_decl, ancestor->type_decl);
+    };
+
+    vector<vector<branch_class*>> inheritanceLinks;
+    for (int i = cases->first(); cases->more(i); i = cases->next(i)) {
+        auto branchNode = dynamic_cast<branch_class*>(cases->nth(i));
+        auto typeLabel = branchNode->type_decl;
+        bool matched = false;
+        for(auto &link : inheritanceLinks) {
+            if(context.classTable->isAncestor(typeLabel, link.front()->type_decl) 
+                || context.classTable->isAncestor(link.front()->type_decl, typeLabel)) {
+                link.push_back(branchNode);
+                matched = true;
+                break;
+            }
+        }
+        if(!matched) {
+            inheritanceLinks.push_back({branchNode});
+        }
+    }
+
+    for(auto &link : inheritanceLinks) {
+        sort(link.begin(), link.end(), inheritanceOrder);
+    }
+
     emit_load(T1, TAG_OFFSET, ACC, s);
 
-    for (int i = cases->first(); cases->more(i); i = cases->next(i)) {
-        int nextLabel = curLabel++;
-        auto branch = dynamic_cast<branch_class *>(cases->nth(i));
-        int curTag =
-            context.classTable->lookup(branch->type_decl)->get_classTag();
-        emit_load_imm(T2, curTag, s);
-        emit_bne(T1, T2, nextLabel, s);
+    for(auto &link : inheritanceLinks) {
+        for(auto branchNode : link) {
+            int nextLabel = curLabel++;
+            auto typeNode = context.classTable->lookup(branchNode->type_decl);
+            int tagLowBound = typeNode->get_classTag(), tagUpBound = typeNode->offspringCount() + typeNode->get_classTag();
+            emit_blti(T1, tagLowBound, nextLabel, s);
+            emit_bgti(T1, tagUpBound, nextLabel, s);
 
-        NameScope branchScope(context.classTable);
-        // hit
-        context.classTable->bindObjectName(branch->name, FP, -curSpFpSize);
-        branch->expr->code(s, context);
-        emit_branch(endLabel, s);
+            NameScope branchScope(context.classTable);
+            // hit
+            context.classTable->bindObjectName(branchNode->name, FP, -curSpFpSize);
+            branchNode->expr->code(s, context);
+            emit_branch(endLabel, s);
 
-        // fallback
-        emit_label_def(nextLabel, s);
+            // fallback
+            emit_label_def(nextLabel, s);
+        }
     }
 
     auto fileName = stringtable.add_string(context.classNode->get_filename()->get_string());
